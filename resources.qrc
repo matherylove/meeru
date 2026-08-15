@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/assets">
+        <file>Meeru Trans.png</file>
+        <file>Meeru Full.jpg</file>
+        <file>Meeru Black.png</file>
+    </qresource>
+</RCC>
