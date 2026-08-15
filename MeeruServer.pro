@@ -26,7 +26,14 @@ HEADERS += \
     third_party/monocypher/monocypher.h
 
 win32 {
-    LIBS += -ladvapi32 -lcrypt32
+    # advapi32 and crypt32 are for CryptGenRandom and DPAPI.
+    #
+    # gdi32 and user32 look out of place in a console program, and they are:
+    # the static QtNetwork pulls in OpenSSL, whose RAND_screen() seeds its
+    # generator from the contents of the screen and therefore calls into GDI.
+    # The messenger never notices because QtGui already links them; a build
+    # with "QT -= gui" has to ask for them itself.
+    LIBS += -ladvapi32 -lcrypt32 -lgdi32 -luser32
     DEFINES += _CRT_SECURE_NO_WARNINGS WINVER=0x0501 _WIN32_WINNT=0x0501
 }
 
