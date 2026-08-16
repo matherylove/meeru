@@ -87,16 +87,16 @@ bool FirewallHelper::installRules(quint16 tcpPort, quint16 udpPort,
     // leave a hole open for anything else that happens to use the number.
     QString commands;
     commands += QString::fromLatin1(
-        "netsh advfirewall firewall delete rule name=\\"%1\\" >nul 2>&1 & "
-        "netsh advfirewall firewall delete rule name=\\"%2\\" >nul 2>&1 & ")
+        "netsh advfirewall firewall delete rule name=\"%1\" >nul 2>&1 & "
+        "netsh advfirewall firewall delete rule name=\"%2\" >nul 2>&1 & ")
         .arg(ruleName(true)).arg(ruleName(false));
     commands += QString::fromLatin1(
-        "netsh advfirewall firewall add rule name=\\"%1\\" dir=in action=allow "
-        "program=\\"%2\\" protocol=TCP localport=%3 profile=%4 & ")
+        "netsh advfirewall firewall add rule name=\"%1\" dir=in action=allow "
+        "program=\"%2\" protocol=TCP localport=%3 profile=%4 & ")
         .arg(ruleName(true)).arg(program).arg(tcpPort).arg(scopes);
     commands += QString::fromLatin1(
-        "netsh advfirewall firewall add rule name=\\"%1\\" dir=in action=allow "
-        "program=\\"%2\\" protocol=UDP localport=%3 profile=%4")
+        "netsh advfirewall firewall add rule name=\"%1\" dir=in action=allow "
+        "program=\"%2\" protocol=UDP localport=%3 profile=%4")
         .arg(ruleName(false)).arg(program).arg(udpPort).arg(scopes);
 
     const QString parameters = QString::fromLatin1("/c ") + commands;
