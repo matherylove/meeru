@@ -24,6 +24,7 @@ struct AppSettings
     bool useUpnp;
     bool useDht;
     bool dhtFallback;
+    bool dhtNoticeShown;
     QString firewallProfiles;   // "private,domain,public"
     int listenPort;                 // 0 = pick one automatically
     QString publicAddress;          // what the outside world can reach, when forwarded by hand

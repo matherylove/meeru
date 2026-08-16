@@ -84,6 +84,11 @@ QString DhtDirectory::externalAddress() const
     return node_ ? node_->externalAddress() : QString();
 }
 
+int DhtDirectory::nodeCount() const
+{
+    return node_ ? node_->contactCount() : 0;
+}
+
 bool DhtDirectory::start(const QString &identityId, const IdentityMaterial &material,
                          quint16 port, QString *error)
 {

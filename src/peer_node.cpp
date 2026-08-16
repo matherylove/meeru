@@ -281,6 +281,25 @@ QString PeerNode::diagnostics() const
     lines.append(QString::fromLatin1("Connection attempts made: %1.").arg(connectionAttempts_));
     lines.append(QString::fromLatin1("Requests waiting to be delivered: %1.").arg(pendingRequests_.size()));
 
+    lines.append(QString());
+    if (!dhtEnabled_ && !dht_) {
+        lines.append(QString::fromLatin1("Worldwide lookup (DHT): switched off."));
+    } else if (!dht_) {
+        lines.append(QString::fromLatin1("Worldwide lookup (DHT): could not start. %1").arg(dhtStatus_));
+    } else if (!dht_->isReady()) {
+        lines.append(QString::fromLatin1("Worldwide lookup (DHT): still joining the network, "
+                                         "%1 nodes known so far.").arg(dht_->nodeCount()));
+        lines.append(QString::fromLatin1("    If this never rises above zero, UDP to the internet is "
+                                         "being blocked and the DHT cannot be used from here."));
+    } else {
+        lines.append(QString::fromLatin1("Worldwide lookup (DHT): connected, %1 nodes known.")
+                         .arg(dht_->nodeCount()));
+        if (!dht_->externalAddress().isEmpty())
+            lines.append(QString::fromLatin1("    Seen from the internet as %1.").arg(dht_->externalAddress()));
+        lines.append(QString::fromLatin1("    %1").arg(dhtStatus_));
+    }
+    lines.append(QString());
+
     if (connectionFailures_ > 0)
         lines.append(QString::fromLatin1("Failed connections: %1.").arg(connectionFailures_));
     if (handshakeFailures_ > 0)
@@ -288,15 +307,24 @@ QString PeerNode::diagnostics() const
     if (!lastError_.isEmpty())
         lines.append(QString::fromLatin1("\nLast problem: %1").arg(lastError_));
 
-    if (endpoints_.isEmpty() && connectionAttempts_ == 0) {
+    if (connectionAttempts_ == 0 && pendingRequests_.isEmpty()) {
         lines.append(QString::fromLatin1(
-            "\nNobody has been seen and nothing has been dialled. If the other computer is on this "
-            "same network and also running Meeru, the usual cause is Windows Firewall blocking Meeru, "
-            "or the network being marked as Public. Allow Meeru on private networks on both machines."));
-    } else if (connectionAttempts_ > 0 && established == 0) {
+            "\nNothing to report yet: no request has needed sending."));
+    } else if (connectionAttempts_ == 0) {
         lines.append(QString::fromLatin1(
-            "\nThe other computer was found but the connection did not complete. That points at the "
-            "firewall on the receiving side blocking incoming connections on the port above."));
+            "\nThere is a request waiting but no address to send it to. Nobody was found on this "
+            "network, and the worldwide lookup has not produced an address either. Both sides need "
+            "the DHT switched on for a contact in another country to be found."));
+    } else if (established == 0 && !endpoints_.isEmpty()) {
+        lines.append(QString::fromLatin1(
+            "\nThe other computer was found on this network but the connection did not complete. "
+            "That points at something blocking incoming connections on the port above: a firewall, "
+            "an antivirus, or client isolation on the router."));
+    } else if (established == 0) {
+        lines.append(QString::fromLatin1(
+            "\nAn address was tried but nothing answered. If that address is on the far side of the "
+            "internet, the other router is most likely dropping the connection because no port is "
+            "open there."));
     }
 
     return lines.join(QString::fromLatin1("\n"));
@@ -777,6 +805,12 @@ void PeerNode::connectTo(const QString &peerId, const PeerEndpoint &endpoint)
 
     ++connectionAttempts_;
     QTcpSocket *socket = new QTcpSocket(this);
+
+    // Remembered separately: while a socket is still connecting, and after it
+    // is aborted, peerAddress() and peerPort() are empty, which is how the
+    // diagnostics ended up reporting a useless ":0".
+    socket->setProperty("meeruHost", endpoint.host);
+    socket->setProperty("meeruPort", static_cast<int>(endpoint.port));
     connecting_.insert(socket, peerId);
     connect(socket, SIGNAL(connected()), this, SLOT(onOutgoingConnected()));
     connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(onOutgoingError()));
@@ -813,9 +847,8 @@ void PeerNode::onOutgoingError()
     // Why a connection failed is the single most useful thing to know when
     // nothing appears to happen, so it is recorded rather than discarded.
     lastError_ = QString::fromLatin1("Could not connect to %1:%2 - %3")
-                     .arg(socket->peerName().isEmpty() ? socket->peerAddress().toString()
-                                                       : socket->peerName())
-                     .arg(socket->peerPort())
+                     .arg(socket->property("meeruHost").toString())
+                     .arg(socket->property("meeruPort").toInt())
                      .arg(socket->errorString());
     lastErrorAt_ = QDateTime::currentDateTimeUtc();
     ++connectionFailures_;
@@ -839,8 +872,8 @@ void PeerNode::onConnectTimeout()
 
     lastError_ = QString::fromLatin1("No answer from %1:%2 within %3 seconds. The packets are being "
                                      "dropped somewhere between the two computers.")
-                     .arg(socket->peerAddress().toString())
-                     .arg(socket->peerPort())
+                     .arg(socket->property("meeruHost").toString())
+                     .arg(socket->property("meeruPort").toInt())
                      .arg(kConnectTimeoutMs / 1000);
     lastErrorAt_ = QDateTime::currentDateTimeUtc();
     ++connectionFailures_;

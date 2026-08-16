@@ -47,7 +47,7 @@ bool writeObject(const QString &path, const QJsonObject &object, QString *error)
 AppSettings::AppSettings()
     : formatVersion(1), presence(QString::fromLatin1("available")), startWithWindows(true),
       inviteLifetimeSeconds(Invite::defaultLifetime()),
-      useUpnp(true), useDht(false), dhtFallback(true), firewallProfiles(FirewallHelper::defaultProfiles()), listenPort(0)
+      useUpnp(true), useDht(true), dhtFallback(true), dhtNoticeShown(false), firewallProfiles(FirewallHelper::defaultProfiles()), listenPort(0)
 {
 }
 
@@ -88,8 +88,9 @@ AppSettings SettingsStore::load() const
             settings.inviteLifetimeSeconds = 0;
     }
     settings.useUpnp = object.value("useUpnp").toBool(true);
-    settings.useDht = object.value("useDht").toBool(false);
+    settings.useDht = object.value("useDht").toBool(true);
     settings.dhtFallback = object.value("dhtFallback").toBool(true);
+    settings.dhtNoticeShown = object.value("dhtNoticeShown").toBool(false);
     if (object.contains("firewallProfiles"))
         settings.firewallProfiles = object.value("firewallProfiles").toString();
     settings.listenPort = object.value("listenPort").toInt(0);
@@ -116,6 +117,7 @@ bool SettingsStore::save(const AppSettings &settings, QString *error) const
     object.insert("useUpnp", settings.useUpnp);
     object.insert("useDht", settings.useDht);
     object.insert("dhtFallback", settings.dhtFallback);
+    object.insert("dhtNoticeShown", settings.dhtNoticeShown);
     object.insert("firewallProfiles", settings.firewallProfiles);
     object.insert("listenPort", settings.listenPort);
     object.insert("publicAddress", settings.publicAddress);

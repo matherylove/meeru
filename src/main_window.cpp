@@ -1383,6 +1383,26 @@ void MainWindow::startNetwork()
     node_->setContacts(roster_.contacts());
     publishProfile();
     publishPictures();
+
+    // Being findable worldwide is on by default because it is what makes a
+    // pasted ID work at all across the internet. Turning it on quietly would
+    // still be wrong: it is said out loud, once.
+    if (network.useDht && !network.dhtNoticeShown) {
+        AppSettings values = settings_.load();
+        values.dhtNoticeShown = true;
+        settings_.save(values, 0);
+
+        MeeruDialog::showMessage(
+            this, QString::fromLatin1("Being findable"),
+            QString::fromLatin1("So that somebody can reach you with nothing but your Meeru ID, Meeru "
+                                "publishes where you are in the public network BitTorrent uses to find "
+                                "peers. The entry is signed with your key, so nobody can forge or alter "
+                                "it.\n\nWhat it costs: your public key sits next to your current IP "
+                                "address on machines run by strangers, so anyone who has your ID can see "
+                                "when you are online and roughly where. Settings has a switch to turn "
+                                "this off and stay on your own network only."));
+    }
+
     checkFirewall();
 }
 

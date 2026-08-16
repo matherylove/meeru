@@ -37,6 +37,10 @@ public:
     QString status() const { return status_; }
     QString externalAddress() const;
 
+    // How many DHT nodes we know of: zero for a long stretch means UDP to the
+    // internet is not getting through.
+    int nodeCount() const;
+
     // Endpoints this device answers on, republished whenever they change.
     void setLocalEndpoints(const QStringList &endpoints);
 
