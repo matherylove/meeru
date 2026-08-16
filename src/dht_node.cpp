@@ -756,8 +756,8 @@ void DhtNode::finishLookup(int lookupId)
     const Lookup lookup = lookups_.take(lookupId);
 
     if (lookup.kind == LookupDiscover) {
-        emit statusChanged(QString::fromLatin1("Connected to %1 nodes of the distributed network")
-                               .arg(contactCount()));
+        // Deliberately quiet: this runs every few minutes and would otherwise
+        // keep overwriting the far more useful "published" status.
         return;
     }
 

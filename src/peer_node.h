@@ -205,6 +205,7 @@ private:
     int connectionAttempts_;
     int handshakeFailures_;
     int connectionFailures_;
+    int inboundConnections_;
     int preferredPort_;
     bool useUpnp_;
 };

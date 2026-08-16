@@ -132,7 +132,8 @@ PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
       useUpnp_(true),
       connectionAttempts_(0),
       handshakeFailures_(0),
-      connectionFailures_(0)
+      connectionFailures_(0),
+      inboundConnections_(0)
 {
 }
 
@@ -292,6 +293,7 @@ QString PeerNode::diagnostics() const
     }
     lines.append(QString::fromLatin1("Connections established: %1.").arg(established));
     lines.append(QString::fromLatin1("Connection attempts made: %1.").arg(connectionAttempts_));
+    lines.append(QString::fromLatin1("Incoming connections received: %1.").arg(inboundConnections_));
     lines.append(QString::fromLatin1("Requests waiting to be delivered: %1.").arg(pendingRequests_.size()));
 
     lines.append(QString());
@@ -310,7 +312,10 @@ QString PeerNode::diagnostics() const
                          .arg(dht_->nodeCount()));
         if (!dht_->externalAddress().isEmpty())
             lines.append(QString::fromLatin1("    Seen from the internet as %1.").arg(dht_->externalAddress()));
-        lines.append(QString::fromLatin1("    %1").arg(dhtStatus_));
+        lines.append(dht_->isPublished()
+            ? QString::fromLatin1("    Findable worldwide: published to %1 nodes.")
+                  .arg(dht_->publishedNodeCount())
+            : QString::fromLatin1("    Not published yet, so nobody can look this device up."));
     }
     lines.append(QString());
 
@@ -336,9 +341,19 @@ QString PeerNode::diagnostics() const
             "an antivirus, or client isolation on the router."));
     } else if (established == 0) {
         lines.append(QString::fromLatin1(
-            "\nAn address was tried but nothing answered. If that address is on the far side of the "
-            "internet, the other router is most likely dropping the connection because no port is "
-            "open there."));
+            "\nAn address was tried but nothing answered. Whatever is at that address is not letting "
+            "the connection through: on the far side, either no port is open at the router, or the "
+            "firewall of that computer is dropping it before Meeru ever sees it."));
+    }
+
+    // Being reachable on paper and never receiving anything is the single most
+    // telling combination, and it points squarely at the receiving side.
+    if (inboundConnections_ == 0 && (!externalAddress_.isEmpty() || !manualAddress_.isEmpty())) {
+        lines.append(QString::fromLatin1(
+            "\nThis computer believes it is reachable from the internet but has never received a "
+            "single incoming connection. If a contact is trying to reach you and failing, the port "
+            "forwarding is not really in place, or Windows Firewall is dropping the connection before "
+            "Meeru sees it. Settings can add the firewall rules."));
     }
 
     return lines.join(QString::fromLatin1("\n"));
@@ -927,6 +942,7 @@ void PeerNode::onIncomingConnection()
 {
     while (server_ && server_->hasPendingConnections()) {
         QTcpSocket *socket = server_->nextPendingConnection();
+        ++inboundConnections_;
         adopt(socket, false, QString());
     }
 }

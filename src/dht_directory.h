@@ -41,6 +41,11 @@ public:
     // internet is not getting through.
     int nodeCount() const;
 
+    // Whether our own record is out there, kept apart from the passing status
+    // messages so a later one cannot quietly overwrite it.
+    bool isPublished() const { return publishedOn_ > 0; }
+    int publishedNodeCount() const { return publishedOn_; }
+
     // Endpoints this device answers on, republished whenever they change.
     void setLocalEndpoints(const QStringList &endpoints);
 
@@ -77,6 +82,7 @@ private:
     quint16 port_;
     QString status_;
     qint64 lastSequence_;
+    int publishedOn_;
     QHash<QString, QDateTime> lookups_;
 };
 

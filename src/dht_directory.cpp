@@ -60,7 +60,7 @@ QByteArray DhtDirectory::recordSalt()
 }
 
 DhtDirectory::DhtDirectory(QObject *parent)
-    : QObject(parent), node_(0), republish_(0), port_(0), lastSequence_(0)
+    : QObject(parent), node_(0), republish_(0), port_(0), lastSequence_(0), publishedOn_(0)
 {
 }
 
@@ -137,6 +137,8 @@ bool DhtDirectory::start(const QString &identityId, const IdentityMaterial &mate
 
 void DhtDirectory::stop()
 {
+    publishedOn_ = 0;
+
     if (republish_) {
         republish_->stop();
         delete republish_;
@@ -286,6 +288,7 @@ void DhtDirectory::onPutFinished(const QByteArray &publicKey, const QByteArray &
 {
     Q_UNUSED(publicKey);
     Q_UNUSED(salt);
+    publishedOn_ = storedOn;
     status_ = storedOn > 0
         ? QString::fromLatin1("Findable worldwide (published to %1 nodes)").arg(storedOn)
         : QString::fromLatin1("Could not publish where to find you");
