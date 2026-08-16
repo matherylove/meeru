@@ -58,11 +58,6 @@ QByteArray counterNonce(quint64 counter)
 
 }
 
-int PeerSession::maximumFrameSize()
-{
-    return kMaxFrame;
-}
-
 PeerSession::PeerSession(QTcpSocket *socket,
                          const IdentityMaterial &material,
                          const QString &ownIdentityId,
@@ -161,7 +156,7 @@ bool PeerSession::handleHello(const QByteArray &frame)
 
     // The ID is derived from the key, so this is what stops anyone claiming
     // somebody else's ID.
-    peerId_ = QString::fromLatin1(IdentityCrypto::deriveId("meeru-identity", peerEdPublic_));
+    peerId_ = IdentityCrypto::identityIdFor(peerEdPublic_);
     if (peerId_ == ownId_) {
         fail(QString::fromLatin1("That is this identity"));
         return false;

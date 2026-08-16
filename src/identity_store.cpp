@@ -73,12 +73,6 @@ QByteArray IdentityStore::canonicalPayload(const LocalProfile &profile)
     return jsonBytes(object);
 }
 
-bool IdentityStore::hasActiveIdentity() const
-{
-    LocalProfile profile;
-    return loadActive(&profile, 0);
-}
-
 QString IdentityStore::activeIdentityId() const
 {
     QFile file(paths_.activeProfilesFile());
@@ -168,7 +162,7 @@ bool IdentityStore::create(const QString &displayName, const QString &presence, 
 
     LocalProfile result;
     result.formatVersion = 1;
-    result.identityId = QString::fromLatin1(IdentityCrypto::deriveId("meeru-identity", material.edPublic));
+    result.identityId = IdentityCrypto::identityIdFor(material.edPublic);
     result.deviceId = QString::fromLatin1(IdentityCrypto::deriveId("meeru-device", material.xPublic));
     result.displayName = displayName.trimmed();
     result.presence = presence;

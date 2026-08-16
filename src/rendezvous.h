@@ -49,7 +49,6 @@ public:
                const QStringList &hosts, quint16 listenPort);
     void stop();
     bool isConnected() const;
-    QString observedAddress() const { return observedAddress_; }
 
     void setLocalEndpoints(const QStringList &endpoints);
 
@@ -90,7 +89,6 @@ private:
     int hostIndex_;
     quint16 listenPort_;
     QStringList endpoints_;
-    QString observedAddress_;
     bool running_;
     bool registered_;
 
@@ -111,7 +109,6 @@ public:
 
     bool listen(quint16 port, QString *error = 0);
     quint16 port() const;
-    int registeredCount() const { return registrations_.size(); }
 
 signals:
     void logMessage(const QString &text);

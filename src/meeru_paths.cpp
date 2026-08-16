@@ -1,7 +1,6 @@
 #include "meeru_paths.h"
 
 #include <QDir>
-#include <QFileInfo>
 #include <QStandardPaths>
 
 #ifdef Q_OS_WIN

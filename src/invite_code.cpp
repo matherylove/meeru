@@ -205,7 +205,7 @@ bool Invite::decode(const QString &text, Card *card, QString *error)
     // The ID is the hash of the key, and the key signed the addresses. Without
     // both checks anyone could hand out a card pointing at a machine of theirs
     // while wearing somebody else's ID.
-    if (QString::fromLatin1(IdentityCrypto::deriveId("meeru-identity", result.edPublic)) != result.identityId) {
+    if (IdentityCrypto::identityIdFor(result.edPublic) != result.identityId) {
         if (error)
             *error = QString::fromLatin1("That invite code does not match its own identity");
         return false;

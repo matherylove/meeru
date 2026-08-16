@@ -7,7 +7,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkInterface>
-#include <QSaveFile>
 #include <QStringList>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -15,6 +14,7 @@
 #include <QUdpSocket>
 
 #include "avatar.h"
+#include "dht_directory.h"
 #include "peer_session.h"
 #include "port_mapper.h"
 #include "rendezvous.h"
@@ -28,6 +28,7 @@ const int kListenPortRange = 20;
 const int kAnnounceIntervalMs = 8000;
 const int kReconnectIntervalMs = 20000;
 const int kMaxPictureBytes = 3 * 1024 * 1024;
+const int kMaxPortNumber = 65535;
 
 const char kMsgProfile[] = "profile";
 const char kMsgTrustRequest[] = "trust-request";
@@ -47,11 +48,6 @@ QString PeerEndpoint::toString() const
     if (!isValid())
         return QString();
     return host + QLatin1Char(':') + QString::number(port);
-}
-
-quint16 PeerNode::discoveryPort()
-{
-    return kDiscoveryPort;
 }
 
 // Accepts "meeru:<id>@host:port", "<id>@host:port" and a bare "host:port".
@@ -79,7 +75,7 @@ QString PeerNode::parseEndpointHint(const QString &value, QString *host, quint16
     if (colon > 0) {
         bool ok = false;
         const int number = rest.mid(colon + 1).toInt(&ok);
-        if (ok && number > 0 && number < 65536) {
+        if (ok && number > 0 && number <= kMaxPortNumber) {
             if (host)
                 *host = rest.left(colon).trimmed();
             if (port)
@@ -106,6 +102,8 @@ PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
       reconnectTimer_(0),
       listenPort_(0),
       running_(false),
+      dht_(0),
+      dhtEnabled_(false),
       mapper_(0),
       rendezvous_(0),
       preferredPort_(0),
@@ -115,7 +113,7 @@ PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
 
 void PeerNode::setNetworkPreferences(int listenPort, const QString &publicAddress, bool useUpnp)
 {
-    preferredPort_ = (listenPort > 0 && listenPort < 65536) ? listenPort : 0;
+    preferredPort_ = (listenPort > 0 && listenPort <= kMaxPortNumber) ? listenPort : 0;
     manualAddress_ = publicAddress.trimmed();
     useUpnp_ = useUpnp;
 }
@@ -194,6 +192,20 @@ bool PeerNode::start(const LocalProfile &profile, const IdentityMaterial &materi
         mapper_->requestMapping(listenPort_);
     }
 
+    if (dhtEnabled_) {
+        dht_ = new DhtDirectory(this);
+        connect(dht_, SIGNAL(peerLocated(QString,QStringList)), this, SLOT(onPeerLocated(QString,QStringList)));
+        connect(dht_, SIGNAL(peerNotFound(QString)), this, SLOT(onPeerNotFound(QString)));
+        connect(dht_, SIGNAL(statusChanged(QString)), this, SLOT(onDhtStatus(QString)));
+
+        QString dhtError;
+        if (!dht_->start(profile_.identityId, material_, listenPort_, &dhtError)) {
+            dhtStatus_ = dhtError;
+            delete dht_;
+            dht_ = 0;
+        }
+    }
+
     rendezvous_ = new RendezvousClient(this);
     connect(rendezvous_, SIGNAL(relayedSocket(QString,QTcpSocket*,bool)),
             this, SLOT(onRelayedSocket(QString,QTcpSocket*,bool)));
@@ -233,6 +245,8 @@ QString PeerNode::reachability() const
     if (!externalAddress_.isEmpty())
         return QString::fromLatin1("Reachable at ") + externalAddress_
              + QString::fromLatin1(" (opened by your router)");
+    if (dht_ && dht_->isReady() && !dhtStatus_.isEmpty())
+        return dhtStatus_;
     if (!rendezvousStatus_.isEmpty())
         return rendezvousStatus_;
     return QString::fromLatin1("Local network only");
@@ -269,10 +283,14 @@ QStringList PeerNode::localEndpoints() const
 
 void PeerNode::publishEndpoints()
 {
-    if (!rendezvous_)
+    if (!rendezvous_ && !dht_)
         return;
 
-    rendezvous_->setLocalEndpoints(localEndpoints());
+    const QStringList endpoints = localEndpoints();
+    if (rendezvous_)
+        rendezvous_->setLocalEndpoints(endpoints);
+    if (dht_)
+        dht_->setLocalEndpoints(endpoints);
 }
 
 void PeerNode::onPortMapped(const QString &externalAddress)
@@ -298,8 +316,15 @@ void PeerNode::onRendezvousStatus(const QString &summary)
 
 void PeerNode::onPeerUnreachable(const QString &peerId, const QString &reason)
 {
-    Q_UNUSED(peerId);
     Q_UNUSED(reason);
+    if (peerId.isEmpty() || sessions_.contains(peerId))
+        return;
+
+    // The relay could not reach them. The DHT is the remaining way to find
+    // out where they are, so the ladder runs in both directions rather than
+    // ending here.
+    if (dht_ && dht_->isReady())
+        dht_->locate(peerId);
 }
 
 void PeerNode::onDirectCandidates(const QString &peerId, const QStringList &endpoints)
@@ -368,8 +393,85 @@ void PeerNode::reach(const QString &peerId)
     }
 
     announce(true);
+
+    // Ask the DHT where they are. Its answer arrives asynchronously and comes
+    // back through onPeerLocated, which then dials them directly.
+    if (dht_ && dht_->isReady())
+        dht_->locate(peerId);
+
     if (rendezvous_ && rendezvous_->isConnected())
         rendezvous_->requestConnection(peerId);
+}
+
+void PeerNode::setDhtEnabled(bool enabled)
+{
+    if (dhtEnabled_ == enabled)
+        return;
+    dhtEnabled_ = enabled;
+
+    if (!running_)
+        return;
+
+    if (!enabled) {
+        if (dht_) {
+            dht_->stop();
+            delete dht_;
+            dht_ = 0;
+        }
+        dhtStatus_ = QString::fromLatin1("Not published");
+        emitStatus();
+        return;
+    }
+
+    dht_ = new DhtDirectory(this);
+    connect(dht_, SIGNAL(peerLocated(QString,QStringList)), this, SLOT(onPeerLocated(QString,QStringList)));
+    connect(dht_, SIGNAL(peerNotFound(QString)), this, SLOT(onPeerNotFound(QString)));
+    connect(dht_, SIGNAL(statusChanged(QString)), this, SLOT(onDhtStatus(QString)));
+
+    QString dhtError;
+    if (!dht_->start(profile_.identityId, material_, listenPort_, &dhtError)) {
+        dhtStatus_ = dhtError;
+        delete dht_;
+        dht_ = 0;
+        return;
+    }
+    publishEndpoints();
+}
+
+void PeerNode::onPeerLocated(const QString &peerId, const QStringList &endpoints)
+{
+    if (sessions_.contains(peerId))
+        return;
+
+    // Everything here was signed by the contact's own key before the DHT layer
+    // would hand it over, so these addresses genuinely came from them.
+    for (int i = 0; i < endpoints.size(); ++i) {
+        QString host;
+        quint16 port = 0;
+        parseEndpointHint(endpoints.at(i), &host, &port);
+        if (host.isEmpty() || port == 0)
+            continue;
+        PeerEndpoint endpoint;
+        endpoint.host = host;
+        endpoint.port = port;
+        endpoints_.insert(peerId, endpoint);
+        connectTo(peerId, endpoint);
+    }
+}
+
+void PeerNode::onPeerNotFound(const QString &peerId)
+{
+    // Not on the DHT right now: the relay is the remaining option.
+    if (sessions_.contains(peerId))
+        return;
+    if (rendezvous_ && rendezvous_->isConnected())
+        rendezvous_->requestConnection(peerId);
+}
+
+void PeerNode::onDhtStatus(const QString &summary)
+{
+    dhtStatus_ = summary;
+    emitStatus();
 }
 
 void PeerNode::stop()
@@ -388,6 +490,11 @@ void PeerNode::stop()
         pending.key()->deleteLater();
     connecting_.clear();
 
+    if (dht_) {
+        dht_->stop();
+        delete dht_;
+        dht_ = 0;
+    }
     if (rendezvous_) {
         rendezvous_->stop();
         delete rendezvous_;
@@ -553,11 +660,6 @@ void PeerNode::onDiscoveryDatagram()
             connectTo(id, endpoint);
         }
     }
-}
-
-PeerEndpoint PeerNode::knownEndpoint(const QString &peerId) const
-{
-    return endpoints_.value(peerId);
 }
 
 bool PeerNode::isOnline(const QString &peerId) const

@@ -193,6 +193,7 @@ public:
                    const QStringList &rendezvousHosts,
                    const QString &reachability,
                    bool useUpnp,
+                   bool useDht,
                    int listenPort,
                    const QString &publicAddress,
                    QWidget *parent = 0);
@@ -202,6 +203,7 @@ public:
     QStringList rendezvousHosts() const;
 
     bool useUpnp() const;
+    bool useDht() const;
     int listenPort() const;
     QString publicAddress() const;
 
@@ -216,6 +218,7 @@ private:
     QCheckBox *startupBox_;
     QLineEdit *rendezvousEdit_;
     QCheckBox *upnpBox_;
+    QCheckBox *dhtBox_;
     QLineEdit *portEdit_;
     QLineEdit *publicEdit_;
 };

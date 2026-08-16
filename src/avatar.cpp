@@ -11,7 +11,6 @@
 #include <QMouseEvent>
 #include <QMovie>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPropertyAnimation>
 #include <QSaveFile>
 #include <QStringList>

@@ -22,6 +22,7 @@ struct AppSettings
 
     // Advanced networking, for when the router will not cooperate on its own.
     bool useUpnp;
+    bool useDht;
     int listenPort;                 // 0 = pick one automatically
     QString publicAddress;          // what the outside world can reach, when forwarded by hand
 };

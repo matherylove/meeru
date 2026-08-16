@@ -13,6 +13,7 @@
 #include "roster.h"
 
 class PeerSession;
+class DhtDirectory;
 class PortMapper;
 class RendezvousClient;
 class QTcpServer;
@@ -59,6 +60,11 @@ public:
     // Set before start(). A fixed port plus an address forwarded by hand is the
     // way through for people whose router does not answer UPnP.
     void setNetworkPreferences(int listenPort, const QString &publicAddress, bool useUpnp);
+
+    // The DHT lets contacts anywhere find this device with nothing but a
+    // Meeru ID. It is off unless the user turns it on, because publishing
+    // there means putting your key beside your IP on strangers' machines.
+    void setDhtEnabled(bool enabled);
     QString reachability() const;
     void stop();
     bool isRunning() const;
@@ -80,9 +86,7 @@ public:
 
     // Every address this device believes it answers on, best route first.
     QStringList localEndpoints() const;
-    PeerEndpoint knownEndpoint(const QString &peerId) const;
 
-    static quint16 discoveryPort();
     static QString parseEndpointHint(const QString &value, QString *host, quint16 *port);
 
 signals:
@@ -111,6 +115,9 @@ private slots:
     void onDirectCandidates(const QString &peerId, const QStringList &endpoints);
     void onRendezvousStatus(const QString &summary);
     void onPeerUnreachable(const QString &peerId, const QString &reason);
+    void onPeerLocated(const QString &peerId, const QStringList &endpoints);
+    void onPeerNotFound(const QString &peerId);
+    void onDhtStatus(const QString &summary);
 
 private:
     void announce(bool query);
@@ -148,6 +155,9 @@ private:
     QHash<QString, int> contactStates_;
     QHash<QTcpSocket *, QString> connecting_;
 
+    DhtDirectory *dht_;
+    bool dhtEnabled_;
+    QString dhtStatus_;
     PortMapper *mapper_;
     RendezvousClient *rendezvous_;
     QStringList rendezvousHosts_;

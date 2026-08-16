@@ -43,13 +43,10 @@ public:
     QString peerId() const { return peerId_; }
     QString peerAddress() const;
     bool isEstablished() const { return stage_ == Established; }
-    bool isInitiator() const { return initiator_; }
 
     void sendControl(const QJsonObject &object);
     void sendPayload(const QJsonObject &header, const QByteArray &blob);
     void closeSession();
-
-    static int maximumFrameSize();
 
 signals:
     void established(const QString &peerId);

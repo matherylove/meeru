@@ -151,7 +151,7 @@ void RendezvousClient::start(const QString &identityId, const IdentityMaterial &
         if (colon > 0) {
             bool ok = false;
             const int number = entry.mid(colon + 1).toInt(&ok);
-            if (ok && number > 0 && number < 65536) {
+            if (ok && number > 0 && number <= 65535) {
                 host.port = static_cast<quint16>(number);
                 entry = entry.left(colon);
             }
@@ -307,7 +307,6 @@ void RendezvousClient::handleControl(const QJsonObject &object)
 
     if (type == QLatin1String("registered")) {
         registered_ = true;
-        observedAddress_ = object.value("address").toString();
         emit statusChanged(QString::fromLatin1("Reachable through the rendezvous node"));
         return;
     }
@@ -509,7 +508,7 @@ void RendezvousServer::handleFrame(QTcpSocket *socket, const QJsonObject &object
         // An ID is the hash of a key, so this proves the caller owns the ID it
         // claims. Without it anyone could park on somebody else's address.
         const bool derived = isIdentityId(id)
-                          && QString::fromLatin1(IdentityCrypto::deriveId("meeru-identity", edPublic)) == id;
+                          && IdentityCrypto::identityIdFor(edPublic) == id;
         const QByteArray message = Rendezvous::registrationChallenge(nonce).toUtf8();
 
         if (!derived || nonce.isEmpty() || !IdentityCrypto::verifySignature(edPublic, message, signature)) {

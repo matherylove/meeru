@@ -1,12 +1,8 @@
 #include <QApplication>
 #include <QFont>
 #include <QIcon>
-#include <QStringList>
-
-#include "rendezvous.h"
 
 #include "login_window.h"
-#include "rendezvous_window.h"
 
 int main(int argc, char *argv[]) {
     // Meeru lays itself out in whole pixels, the way the machines it targets
@@ -34,25 +30,6 @@ int main(int argc, char *argv[]) {
 
     const QIcon meeruIcon(QStringLiteral(":/assets/Meeru Trans.png"));
     app.setWindowIcon(meeruIcon);
-
-    // A rendezvous node is normally MeeruServer, but keeping the mode here too
-    // means somebody can host one from a desktop without a second download.
-    const QStringList arguments = app.arguments();
-    if (arguments.contains(QString::fromLatin1("--rendezvous"))) {
-        quint16 port = Rendezvous::defaultPort();
-        const int at = arguments.indexOf(QString::fromLatin1("--rendezvous"));
-        if (at + 1 < arguments.size()) {
-            bool ok = false;
-            const int number = arguments.at(at + 1).toInt(&ok);
-            if (ok && number > 0 && number < 65536)
-                port = static_cast<quint16>(number);
-        }
-
-        RendezvousWindow *window = new RendezvousWindow(port);
-        window->setWindowIcon(meeruIcon);
-        window->show();
-        return app.exec();
-    }
 
     LoginWindow login;
     login.setWindowIcon(meeruIcon);

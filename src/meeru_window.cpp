@@ -1,6 +1,5 @@
 #include "meeru_window.h"
 
-#include <QApplication>
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QMouseEvent>

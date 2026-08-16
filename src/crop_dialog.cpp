@@ -307,7 +307,7 @@ QPixmap CropCanvas::previewPixmap(int size) const
 
 CropDialog::CropDialog(const QString &path, qreal aspect, const QString &title, QWidget *parent)
     : MeeruDialog(title, parent),
-      path_(path), ready_(false), canvas_(0), slider_(0), preview_(0), hint_(0)
+      ready_(false), canvas_(0), slider_(0), preview_(0), hint_(0)
 {
     setDialogWidth(kCanvasSide + 32);
 

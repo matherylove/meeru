@@ -135,6 +135,38 @@ QByteArray IdentityCrypto::deriveId(const QByteArray &domain, const QByteArray &
     return QByteArray(reinterpret_cast<char *>(hash), sizeof(hash)).toHex();
 }
 
+QString IdentityCrypto::identityIdFor(const QByteArray &edPublic)
+{
+    if (edPublic.size() != kKeySize)
+        return QString();
+    return QString::fromLatin1(edPublic.toHex());
+}
+
+QByteArray IdentityCrypto::dhtSigningKey(const IdentityMaterial &material)
+{
+    if (material.edSecret.size() != kEdSecretSize)
+        return QByteArray();
+
+    // Monocypher expands the seed with BLAKE2b into scalar||prefix and trims
+    // the scalar; [scalar]B is exactly this identity's public key. Reusing
+    // that scalar with SHA-512 hashing produces signatures that any standard
+    // Ed25519 verifier accepts under the same public key, which is what the
+    // DHT needs. Verified against the BEP 44 vectors and against Monocypher's
+    // own key generation.
+    unsigned char expanded[64];
+    crypto_blake2b(expanded, 64, reinterpret_cast<const unsigned char *>(material.edSecret.constData()), 32);
+
+    unsigned char scalar[kKeySize];
+    crypto_eddsa_trim_scalar(scalar, expanded);
+
+    QByteArray key(reinterpret_cast<char *>(scalar), kKeySize);
+    key.append(reinterpret_cast<char *>(expanded + 32), kKeySize);
+
+    crypto_wipe(expanded, sizeof(expanded));
+    crypto_wipe(scalar, sizeof(scalar));
+    return key;
+}
+
 QByteArray IdentityCrypto::profileSignature(const IdentityMaterial &material, const QByteArray &message)
 {
     if (material.edSecret.size() != kEdSecretSize)

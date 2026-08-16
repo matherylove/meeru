@@ -798,12 +798,13 @@ SettingsDialog::SettingsDialog(const QString &displayName,
                                const QStringList &rendezvousHosts,
                                const QString &reachability,
                                bool useUpnp,
+                               bool useDht,
                                int listenPort,
                                const QString &publicAddress,
                                QWidget *parent)
     : MeeruDialog(QString::fromLatin1("Settings"), parent),
       identityId_(identityId), folder_(folder), nameEdit_(0), startupBox_(0),
-      rendezvousEdit_(0), upnpBox_(0), portEdit_(0), publicEdit_(0)
+      rendezvousEdit_(0), upnpBox_(0), dhtBox_(0), portEdit_(0), publicEdit_(0)
 {
     setDialogWidth(400);
 
@@ -828,6 +829,18 @@ SettingsDialog::SettingsDialog(const QString &displayName,
     upnpBox_ = new QCheckBox(QString::fromLatin1("Let Meeru ask the router to open a port (UPnP)"), this);
     upnpBox_->setChecked(useUpnp);
     contentLayout()->addWidget(upnpBox_);
+
+    dhtBox_ = new QCheckBox(QString::fromLatin1("Let contacts find me anywhere, with only my Meeru ID"), this);
+    dhtBox_->setChecked(useDht);
+    contentLayout()->addWidget(dhtBox_);
+    contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
+        "This publishes where you are in the same public network BitTorrent uses to find peers, signed "
+        "with your own key so nobody can forge or change it. It is what lets somebody in another country "
+        "reach you by pasting your ID, with no server involved.\n\n"
+        "It is off by default because of what it costs: your public key sits next to your current IP "
+        "address on machines run by strangers, so anyone who knows your ID can tell when you are online "
+        "and roughly where you are. Leave it off if you would rather be reachable only on your own "
+        "network, by invite code, or through a rendezvous node."), this));
 
     QHBoxLayout *portRow = new QHBoxLayout();
     portRow->setSpacing(8);
@@ -934,6 +947,11 @@ int SettingsDialog::listenPort() const
 QString SettingsDialog::publicAddress() const
 {
     return publicEdit_->text().trimmed();
+}
+
+bool SettingsDialog::useDht() const
+{
+    return dhtBox_->isChecked();
 }
 
 QStringList SettingsDialog::rendezvousHosts() const

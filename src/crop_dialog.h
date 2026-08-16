@@ -81,13 +81,11 @@ public:
     bool isAnimated() const;
     QRect cropRect() const;
     QImage croppedStill() const;
-    QString sourcePath() const { return path_; }
 
 private slots:
     void onSelectionChanged();
 
 private:
-    QString path_;
     bool ready_;
     CropCanvas *canvas_;
     QSlider *slider_;

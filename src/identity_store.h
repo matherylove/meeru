@@ -32,7 +32,6 @@ class IdentityStore
 public:
     explicit IdentityStore(const MeeruPaths &paths);
 
-    bool hasActiveIdentity() const;
     QString activeIdentityId() const;
 
     // Every identity stored on this computer, newest first.

@@ -1247,7 +1247,8 @@ void MainWindow::onSettings()
     SettingsDialog dialog(profile_.displayName, profile_.identityId, paths_.root(),
                           current.startWithWindows, current.rendezvousHosts,
                           node_ ? node_->reachability() : QString(),
-                          current.useUpnp, current.listenPort, current.publicAddress, this);
+                          current.useUpnp, current.useDht, current.listenPort,
+                          current.publicAddress, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
 
@@ -1272,6 +1273,7 @@ void MainWindow::onSettings()
     values.startWithWindows = dialog.startWithWindows();
     values.rendezvousHosts = dialog.rendezvousHosts();
     values.useUpnp = dialog.useUpnp();
+    values.useDht = dialog.useDht();
     values.listenPort = dialog.listenPort();
     values.publicAddress = dialog.publicAddress();
     settings_.save(values, 0);
@@ -1279,6 +1281,7 @@ void MainWindow::onSettings()
     if (node_) {
         node_->setRendezvousHosts(values.rendezvousHosts);
         node_->setNetworkPreferences(values.listenPort, values.publicAddress, values.useUpnp);
+        node_->setDhtEnabled(values.useDht);
     }
 
     if (values.listenPort != current.listenPort) {
@@ -1319,6 +1322,7 @@ void MainWindow::startNetwork()
 
     const AppSettings network = settings_.load();
     node_->setNetworkPreferences(network.listenPort, network.publicAddress, network.useUpnp);
+    node_->setDhtEnabled(network.useDht);
     node_->setRendezvousHosts(network.rendezvousHosts);
 
     // The private key has to be unsealed to prove this identity to peers.

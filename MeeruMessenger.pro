@@ -24,9 +24,15 @@ SOURCES += \
     src/peer_session.cpp \
     src/peer_node.cpp \
     src/contact_card.cpp \
+    src/sha1.cpp \
+    src/crc32c.cpp \
+    src/bencode.cpp \
+    src/sha512.cpp \
+    src/std_ed25519.cpp \
+    src/dht_node.cpp \
+    src/dht_directory.cpp \
     src/invite_code.cpp \
     src/rendezvous.cpp \
-    src/rendezvous_window.cpp \
     src/port_mapper.cpp \
     src/meeru_paths.cpp \
     src/identity_crypto.cpp \
@@ -49,9 +55,15 @@ HEADERS += \
     src/peer_session.h \
     src/peer_node.h \
     src/contact_card.h \
+    src/sha1.h \
+    src/crc32c.h \
+    src/bencode.h \
+    src/sha512.h \
+    src/std_ed25519.h \
+    src/dht_node.h \
+    src/dht_directory.h \
     src/invite_code.h \
     src/rendezvous.h \
-    src/rendezvous_window.h \
     src/port_mapper.h \
     src/meeru_paths.h \
     src/identity_crypto.h \

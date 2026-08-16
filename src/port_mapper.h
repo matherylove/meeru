@@ -24,7 +24,6 @@ public:
 
     void requestMapping(quint16 port);
     void release();
-    bool isMapped() const { return mapped_; }
     QString externalAddress() const { return externalAddress_; }
 
 signals:
