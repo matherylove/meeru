@@ -24,6 +24,7 @@ SOURCES += \
     src/peer_session.cpp \
     src/peer_node.cpp \
     src/contact_card.cpp \
+    src/firewall_helper.cpp \
     src/sha1.cpp \
     src/crc32c.cpp \
     src/bencode.cpp \
@@ -55,6 +56,7 @@ HEADERS += \
     src/peer_session.h \
     src/peer_node.h \
     src/contact_card.h \
+    src/firewall_helper.h \
     src/sha1.h \
     src/crc32c.h \
     src/bencode.h \
@@ -78,7 +80,7 @@ RESOURCES += \
 
 win32 {
     # CryptGenRandom lives in advapi32; CryptProtectData in crypt32.
-    LIBS += -ladvapi32 -lcrypt32 -lws2_32
+    LIBS += -ladvapi32 -lcrypt32 -lws2_32 -lshell32
     DEFINES += _CRT_SECURE_NO_WARNINGS WINVER=0x0501 _WIN32_WINNT=0x0501
 }
 

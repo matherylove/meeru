@@ -316,14 +316,45 @@ void LogOutDialog::chooseBackup()
 AddContactDialog::AddContactDialog(const LocalProfile &profile,
                                    const IdentityMaterial &material,
                                    const QStringList &localEndpoints,
+                                   const QList<NearbyPeer> &nearby,
                                    qint64 inviteLifetime,
                                    QWidget *parent)
     : MeeruDialog(QString::fromLatin1("Add a contact"), parent),
       profile_(profile), material_(material), localEndpoints_(localEndpoints),
-      idEdit_(0), nameEdit_(0), addressEdit_(0), lifetimeBox_(0),
+      nearbyList_(0), idEdit_(0), nameEdit_(0), addressEdit_(0), lifetimeBox_(0),
       lifetimeWarning_(0), feedback_(0), acceptButton_(0)
 {
     setDialogWidth(430);
+
+    // Anyone running Meeru on this network announces themselves, so they can
+    // be picked from a list rather than having to read out 64 characters.
+    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("PEOPLE ON THIS NETWORK"), this));
+    nearbyList_ = new QListWidget(this);
+    nearbyList_->setFixedHeight(nearby.isEmpty() ? 44 : qMin(110, 26 * nearby.size() + 10));
+    nearbyList_->setStyleSheet(QString::fromLatin1(
+        "QListWidget { background: #19121f; border: 1px solid #634A70; border-radius: 6px; padding: 4px; }"
+        "QListWidget::item { padding: 5px; border-radius: 4px; }"
+        "QListWidget::item:hover { background: #2f2139; }"
+        "QListWidget::item:selected { background: #4a3454; }"));
+
+    for (int i = 0; i < nearby.size(); ++i) {
+        const NearbyPeer &peer = nearby.at(i);
+        const QString label = (peer.name.isEmpty() ? peer.identityId.left(12) : peer.name)
+                            + QString::fromLatin1("   ") + peer.address;
+        QListWidgetItem *item = new QListWidgetItem(label, nearbyList_);
+        item->setData(Qt::UserRole, peer.identityId);
+        item->setData(Qt::UserRole + 1, peer.name);
+        item->setIcon(QIcon(MeeruPaint::initialsTile(
+            MeeruPaint::initialsFor(peer.name.isEmpty() ? QString::fromLatin1("?") : peer.name),
+            QSize(20, 20), 5)));
+    }
+    if (nearby.isEmpty()) {
+        QListWidgetItem *empty = new QListWidgetItem(
+            QString::fromLatin1("Nobody else on this network yet."), nearbyList_);
+        empty->setFlags(Qt::NoItemFlags);
+    }
+    contentLayout()->addWidget(nearbyList_);
+    connect(nearbyList_, SIGNAL(itemSelectionChanged()), this, SLOT(onNearbyChosen()));
 
     contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
         "Paste what your friend sent you. An invite code carries their addresses as well as their "
@@ -400,6 +431,23 @@ AddContactDialog::AddContactDialog(const LocalProfile &profile,
 qint64 AddContactDialog::inviteLifetime() const
 {
     return static_cast<qint64>(lifetimeBox_->itemData(lifetimeBox_->currentIndex()).toDouble());
+}
+
+void AddContactDialog::onNearbyChosen()
+{
+    const QList<QListWidgetItem *> selected = nearbyList_->selectedItems();
+    if (selected.isEmpty())
+        return;
+
+    const QString id = selected.first()->data(Qt::UserRole).toString();
+    if (id.isEmpty())
+        return;
+
+    idEdit_->setText(id);
+    const QString name = selected.first()->data(Qt::UserRole + 1).toString();
+    if (!name.isEmpty() && nameEdit_->text().trimmed().isEmpty())
+        nameEdit_->setText(name);
+    validate();
 }
 
 void AddContactDialog::onLifetimeChanged(int index)
@@ -800,13 +848,17 @@ SettingsDialog::SettingsDialog(const QString &displayName,
                                const QString &diagnostics,
                                bool useUpnp,
                                bool useDht,
+                               bool dhtFallback,
+                               const QString &firewallProfiles,
                                int listenPort,
                                const QString &publicAddress,
                                QWidget *parent)
     : MeeruDialog(QString::fromLatin1("Settings"), parent),
       identityId_(identityId), folder_(folder), diagnostics_(diagnostics),
       nameEdit_(0), startupBox_(0),
-      rendezvousEdit_(0), upnpBox_(0), dhtBox_(0), portEdit_(0), publicEdit_(0)
+      rendezvousEdit_(0), upnpBox_(0), dhtBox_(0), dhtFallbackBox_(0),
+      firewallPrivateBox_(0), firewallDomainBox_(0), firewallPublicBox_(0),
+      firewallRequested_(false), portEdit_(0), publicEdit_(0)
 {
     setDialogWidth(400);
 
@@ -840,6 +892,11 @@ SettingsDialog::SettingsDialog(const QString &displayName,
     dhtBox_ = new QCheckBox(QString::fromLatin1("Let contacts find me anywhere, with only my Meeru ID"), this);
     dhtBox_->setChecked(useDht);
     contentLayout()->addWidget(dhtBox_);
+    dhtFallbackBox_ = new QCheckBox(QString::fromLatin1(
+        "Only when someone cannot be reached on my own network"), this);
+    dhtFallbackBox_->setChecked(dhtFallback);
+    contentLayout()->addWidget(dhtFallbackBox_);
+
     contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
         "This publishes where you are in the same public network BitTorrent uses to find peers, signed "
         "with your own key so nobody can forge or change it. It is what lets somebody in another country "
@@ -880,6 +937,32 @@ SettingsDialog::SettingsDialog(const QString &displayName,
         "number on the left, and on the right the address people outside would use. Meeru then puts "
         "that address into your invite codes and contacts connect straight to you.\n\n"
         "A port change takes effect the next time Meeru starts."), this));
+
+    // --- firewall
+    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("WINDOWS FIREWALL"), this));
+
+    QHBoxLayout *profileRow = new QHBoxLayout();
+    profileRow->setSpacing(10);
+    firewallPrivateBox_ = new QCheckBox(QString::fromLatin1("Private"), this);
+    firewallDomainBox_ = new QCheckBox(QString::fromLatin1("Domain"), this);
+    firewallPublicBox_ = new QCheckBox(QString::fromLatin1("Public"), this);
+    firewallPrivateBox_->setChecked(firewallProfiles.contains(QLatin1String("private")));
+    firewallDomainBox_->setChecked(firewallProfiles.contains(QLatin1String("domain")));
+    firewallPublicBox_->setChecked(firewallProfiles.contains(QLatin1String("public")));
+    profileRow->addWidget(firewallPrivateBox_);
+    profileRow->addWidget(firewallDomainBox_);
+    profileRow->addWidget(firewallPublicBox_);
+    profileRow->addStretch();
+    QPushButton *addRules = new QPushButton(QString::fromLatin1("Add rules"), this);
+    profileRow->addWidget(addRules);
+    contentLayout()->addLayout(profileRow);
+    connect(addRules, SIGNAL(clicked()), this, SLOT(onAddFirewallRules()));
+
+    contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
+        "Which kinds of network contacts may reach you on. Windows calls a network Public when it does "
+        "not consider it trusted, such as a cafe or an airport; allowing that is convenient but means "
+        "strangers on the same network can open a connection to Meeru. The rules apply to Meeru alone "
+        "and are checked every time it starts."), this));
 
     contentLayout()->addWidget(fieldLabel(QString::fromLatin1("RENDEZVOUS NODES"), this));
     rendezvousEdit_ = makeEdit(QString::fromLatin1("meeru.example.org:47450, 203.0.113.9"), this);
@@ -959,6 +1042,34 @@ QString SettingsDialog::publicAddress() const
 bool SettingsDialog::useDht() const
 {
     return dhtBox_->isChecked();
+}
+
+QString SettingsDialog::firewallProfiles() const
+{
+    QStringList profiles;
+    if (firewallPrivateBox_->isChecked())
+        profiles.append(QString::fromLatin1("private"));
+    if (firewallDomainBox_->isChecked())
+        profiles.append(QString::fromLatin1("domain"));
+    if (firewallPublicBox_->isChecked())
+        profiles.append(QString::fromLatin1("public"));
+    return profiles.join(QString::fromLatin1(","));
+}
+
+void SettingsDialog::onAddFirewallRules()
+{
+    if (firewallProfiles().isEmpty()) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Windows Firewall"),
+                                 QString::fromLatin1("Choose at least one kind of network first."));
+        return;
+    }
+    firewallRequested_ = true;
+    accept();
+}
+
+bool SettingsDialog::dhtFallback() const
+{
+    return dhtFallbackBox_->isChecked();
 }
 
 QStringList SettingsDialog::rendezvousHosts() const

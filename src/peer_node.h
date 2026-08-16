@@ -34,6 +34,16 @@ struct PeerEndpoint
     QString toString() const;
 };
 
+// A Meeru user seen announcing itself on the local network.
+struct NearbyPeer
+{
+    NearbyPeer() : connected(false) {}
+    QString identityId;
+    QString name;
+    QString address;
+    bool connected;
+};
+
 // The peer to peer engine.
 //
 // Reachability is deliberately smaller than Jami's: Jami finds peers through
@@ -66,6 +76,11 @@ public:
     // Meeru ID. It is off unless the user turns it on, because publishing
     // there means putting your key beside your IP on strangers' machines.
     void setDhtEnabled(bool enabled);
+
+    // When the local network does not deliver a request within a short while,
+    // Meeru falls back to the public DHT on its own. Publishing there is not
+    // free of consequences, so the user is told the first time it happens.
+    void setDhtFallbackAllowed(bool allowed);
     QString reachability() const;
 
     // A plain account of what the engine is actually doing, so a connection
@@ -92,10 +107,22 @@ public:
     // Every address this device believes it answers on, best route first.
     QStringList localEndpoints() const;
 
+    // Everyone announcing themselves on this network, so a contact can be
+    // added by picking them from a list instead of copying an ID.
+    QList<NearbyPeer> nearbyPeers() const;
+
     static QString parseEndpointHint(const QString &value, QString *host, quint16 *port);
+
+    // The UDP port used to find people on the local network, needed by the
+    // firewall helper so the rule and the socket cannot drift apart.
+    static quint16 discoveryUdpPort();
 
 signals:
     void statusChanged(const QString &summary);
+
+    // Raised once, when Meeru turns to the public network because the local
+    // one did not work. The user deserves to know that happened.
+    void dhtEngagedAutomatically();
     void peerConnected(const QString &peerId);
     void peerDisconnected(const QString &peerId);
     void trustRequestReceived(const QString &peerId, const QString &displayName, const QString &message);
@@ -114,6 +141,7 @@ private slots:
     void onReconnectTick();
     void onOutgoingConnected();
     void onOutgoingError();
+    void onConnectTimeout();
     void onPortMapped(const QString &externalAddress);
     void onPortMappingFailed(const QString &reason);
     void onRelayedSocket(const QString &peerId, QTcpSocket *socket, bool initiator);
@@ -162,6 +190,9 @@ private:
 
     DhtDirectory *dht_;
     bool dhtEnabled_;
+    bool dhtFallbackAllowed_;
+    bool dhtStartedAutomatically_;
+    QHash<QString, QDateTime> requestedAt_;
     QString dhtStatus_;
     PortMapper *mapper_;
     RendezvousClient *rendezvous_;
@@ -173,6 +204,7 @@ private:
     QDateTime lastErrorAt_;
     int connectionAttempts_;
     int handshakeFailures_;
+    int connectionFailures_;
     int preferredPort_;
     bool useUpnp_;
 };

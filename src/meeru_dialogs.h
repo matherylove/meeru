@@ -7,6 +7,7 @@
 
 #include "avatar.h"
 #include "identity_crypto.h"
+#include "peer_node.h"
 #include "identity_store.h"
 #include "meeru_window.h"
 #include "roster.h"
@@ -98,6 +99,7 @@ public:
     AddContactDialog(const LocalProfile &profile,
                      const IdentityMaterial &material,
                      const QStringList &localEndpoints,
+                     const QList<NearbyPeer> &nearby,
                      qint64 inviteLifetime,
                      QWidget *parent = 0);
 
@@ -111,6 +113,7 @@ public:
 private slots:
     void onCopyOwnCode();
     void onLifetimeChanged(int index);
+    void onNearbyChosen();
     void validate();
 
 private:
@@ -120,6 +123,7 @@ private:
     QStringList pastedEndpoints_;
     QString pastedId_;
 
+    QListWidget *nearbyList_;
     QLineEdit *idEdit_;
     QLineEdit *nameEdit_;
     QLineEdit *addressEdit_;
@@ -195,6 +199,8 @@ public:
                    const QString &diagnostics,
                    bool useUpnp,
                    bool useDht,
+                   bool dhtFallback,
+                   const QString &firewallProfiles,
                    int listenPort,
                    const QString &publicAddress,
                    QWidget *parent = 0);
@@ -205,6 +211,10 @@ public:
 
     bool useUpnp() const;
     bool useDht() const;
+    bool dhtFallback() const;
+
+    QString firewallProfiles() const;
+    bool firewallRequested() const { return firewallRequested_; }
     int listenPort() const;
     QString publicAddress() const;
 
@@ -212,6 +222,7 @@ private slots:
     void onCopyId();
     void onOpenFolder();
     void onShowDiagnostics();
+    void onAddFirewallRules();
 
 private:
     QString identityId_;
@@ -222,6 +233,11 @@ private:
     QLineEdit *rendezvousEdit_;
     QCheckBox *upnpBox_;
     QCheckBox *dhtBox_;
+    QCheckBox *dhtFallbackBox_;
+    QCheckBox *firewallPrivateBox_;
+    QCheckBox *firewallDomainBox_;
+    QCheckBox *firewallPublicBox_;
+    bool firewallRequested_;
     QLineEdit *portEdit_;
     QLineEdit *publicEdit_;
 };

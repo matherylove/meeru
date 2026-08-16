@@ -29,6 +29,8 @@ const int kAnnounceIntervalMs = 8000;
 const int kReconnectIntervalMs = 20000;
 const int kMaxPictureBytes = 3 * 1024 * 1024;
 const int kMaxPortNumber = 65535;
+const int kConnectTimeoutMs = 8000;
+const int kDhtFallbackSeconds = 10;
 
 const char kMsgProfile[] = "profile";
 const char kMsgTrustRequest[] = "trust-request";
@@ -41,6 +43,11 @@ QString peerDirectory(const MeeruPaths &paths, const QString &ownerId, const QSt
     return paths.identityDirectory(ownerId) + QLatin1String("/peers/") + peerId;
 }
 
+}
+
+quint16 PeerNode::discoveryUdpPort()
+{
+    return kDiscoveryPort;
 }
 
 QString PeerEndpoint::toString() const
@@ -104,12 +111,15 @@ PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
       running_(false),
       dht_(0),
       dhtEnabled_(false),
+      dhtFallbackAllowed_(true),
+      dhtStartedAutomatically_(false),
       mapper_(0),
       rendezvous_(0),
       preferredPort_(0),
       useUpnp_(true),
       connectionAttempts_(0),
-      handshakeFailures_(0)
+      handshakeFailures_(0),
+      connectionFailures_(0)
 {
 }
 
@@ -271,10 +281,12 @@ QString PeerNode::diagnostics() const
     lines.append(QString::fromLatin1("Connection attempts made: %1.").arg(connectionAttempts_));
     lines.append(QString::fromLatin1("Requests waiting to be delivered: %1.").arg(pendingRequests_.size()));
 
-    if (handshakeFailures_ > 0) {
+    if (connectionFailures_ > 0)
+        lines.append(QString::fromLatin1("Failed connections: %1.").arg(connectionFailures_));
+    if (handshakeFailures_ > 0)
         lines.append(QString::fromLatin1("Refused handshakes: %1.").arg(handshakeFailures_));
-        lines.append(QString::fromLatin1("Last problem: %1").arg(lastError_));
-    }
+    if (!lastError_.isEmpty())
+        lines.append(QString::fromLatin1("\nLast problem: %1").arg(lastError_));
 
     if (endpoints_.isEmpty() && connectionAttempts_ == 0) {
         lines.append(QString::fromLatin1(
@@ -305,6 +317,23 @@ QString PeerNode::reachability() const
     if (!rendezvousStatus_.isEmpty())
         return rendezvousStatus_;
     return QString::fromLatin1("Local network only");
+}
+
+QList<NearbyPeer> PeerNode::nearbyPeers() const
+{
+    QList<NearbyPeer> peers;
+    QHash<QString, PeerEndpoint>::const_iterator it = endpoints_.constBegin();
+    for (; it != endpoints_.constEnd(); ++it) {
+        if (!it.value().isValid())
+            continue;
+        NearbyPeer peer;
+        peer.identityId = it.key();
+        peer.name = it.value().name;
+        peer.address = it.value().toString();
+        peer.connected = sessions_.contains(it.key());
+        peers.append(peer);
+    }
+    return peers;
 }
 
 QStringList PeerNode::localEndpoints() const
@@ -456,6 +485,11 @@ void PeerNode::reach(const QString &peerId)
 
     if (rendezvous_ && rendezvous_->isConnected())
         rendezvous_->requestConnection(peerId);
+}
+
+void PeerNode::setDhtFallbackAllowed(bool allowed)
+{
+    dhtFallbackAllowed_ = allowed;
 }
 
 void PeerNode::setDhtEnabled(bool enabled)
@@ -746,6 +780,15 @@ void PeerNode::connectTo(const QString &peerId, const PeerEndpoint &endpoint)
     connecting_.insert(socket, peerId);
     connect(socket, SIGNAL(connected()), this, SLOT(onOutgoingConnected()));
     connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(onOutgoingError()));
+
+    QTimer *guard = new QTimer(this);
+    guard->setSingleShot(true);
+    guard->setInterval(kConnectTimeoutMs);
+    guard->setProperty("socket", QVariant::fromValue(static_cast<QObject *>(socket)));
+    connect(guard, SIGNAL(timeout()), this, SLOT(onConnectTimeout()));
+    connect(socket, SIGNAL(connected()), guard, SLOT(deleteLater()));
+    guard->start();
+
     socket->connectToHost(endpoint.host, endpoint.port);
 }
 
@@ -766,7 +809,44 @@ void PeerNode::onOutgoingError()
     QTcpSocket *socket = qobject_cast<QTcpSocket *>(sender());
     if (!socket)
         return;
+
+    // Why a connection failed is the single most useful thing to know when
+    // nothing appears to happen, so it is recorded rather than discarded.
+    lastError_ = QString::fromLatin1("Could not connect to %1:%2 - %3")
+                     .arg(socket->peerName().isEmpty() ? socket->peerAddress().toString()
+                                                       : socket->peerName())
+                     .arg(socket->peerPort())
+                     .arg(socket->errorString());
+    lastErrorAt_ = QDateTime::currentDateTimeUtc();
+    ++connectionFailures_;
+
     connecting_.remove(socket);
+    socket->deleteLater();
+}
+
+void PeerNode::onConnectTimeout()
+{
+    // A dropped SYN leaves the socket in "connecting" for tens of seconds and
+    // blocks further attempts to that peer, so give up early and say so.
+    QTimer *timer = qobject_cast<QTimer *>(sender());
+    if (!timer)
+        return;
+
+    QTcpSocket *socket = qobject_cast<QTcpSocket *>(timer->property("socket").value<QObject *>());
+    timer->deleteLater();
+    if (!socket || !connecting_.contains(socket))
+        return;
+
+    lastError_ = QString::fromLatin1("No answer from %1:%2 within %3 seconds. The packets are being "
+                                     "dropped somewhere between the two computers.")
+                     .arg(socket->peerAddress().toString())
+                     .arg(socket->peerPort())
+                     .arg(kConnectTimeoutMs / 1000);
+    lastErrorAt_ = QDateTime::currentDateTimeUtc();
+    ++connectionFailures_;
+
+    connecting_.remove(socket);
+    socket->abort();
     socket->deleteLater();
 }
 
@@ -826,6 +906,7 @@ void PeerNode::onSessionEstablished(const QString &peerId)
         request.insert("message", pendingRequests_.value(peerId));
         session->sendControl(request);
         pendingRequests_.remove(peerId);
+        requestedAt_.remove(peerId);
     }
 
     if (accepted) {
@@ -891,6 +972,25 @@ void PeerNode::onReconnectTick()
         reach(it.key());
     }
     announce(true);
+
+    // Nothing has been delivered locally after a fair wait: widen the search.
+    if (dhtFallbackAllowed_ && !dht_ && !pendingRequests_.isEmpty()) {
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        QHash<QString, QDateTime>::const_iterator waiting = requestedAt_.constBegin();
+        for (; waiting != requestedAt_.constEnd(); ++waiting) {
+            if (!pendingRequests_.contains(waiting.key()))
+                continue;
+            if (waiting.value().secsTo(now) < kDhtFallbackSeconds)
+                continue;
+
+            setDhtEnabled(true);
+            if (dht_) {
+                dhtStartedAutomatically_ = true;
+                emit dhtEngagedAutomatically();
+            }
+            break;
+        }
+    }
 }
 
 // ------------------------------------------------------------------ messaging
@@ -905,6 +1005,7 @@ bool PeerNode::requestContact(const QString &peerId, const QString &endpointHint
     }
 
     pendingRequests_.insert(peerId, message);
+    requestedAt_.insert(peerId, QDateTime::currentDateTimeUtc());
     if (!endpointHint.trimmed().isEmpty())
         pendingHints_.insert(peerId, endpointHint.trimmed());
 

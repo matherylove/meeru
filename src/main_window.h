@@ -68,6 +68,7 @@ private slots:
     void onPeerProfile(const QString &peerId, const QString &displayName,
                        const QString &presence, const QString &statusText);
     void onPeerPicture(const QString &peerId, const QString &kind);
+    void onDhtEngaged();
     void onHoverItem(QListWidgetItem *item);
     void onHoverTimeout();
 
@@ -84,6 +85,7 @@ private:
     void refreshList();
     void refreshNews();
     void startNetwork();
+    void checkFirewall();
     void publishProfile();
     void publishPictures();
     QPixmap contactTile(const Roster::Contact &contact) const;

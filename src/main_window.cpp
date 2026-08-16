@@ -28,6 +28,7 @@
 #include <QTimer>
 
 #include "contact_card.h"
+#include "firewall_helper.h"
 #include "meeru_dialogs.h"
 #include "meeru_paint.h"
 #include "meeru_style.h"
@@ -930,6 +931,7 @@ void MainWindow::addContactsEntry()
     const AppSettings current = settings_.load();
     AddContactDialog dialog(profile_, material,
                             node_ ? node_->localEndpoints() : QStringList(),
+                            node_ ? node_->nearbyPeers() : QList<NearbyPeer>(),
                             current.inviteLifetimeSeconds, this);
     const int result = dialog.exec();
     material.clear();
@@ -1256,7 +1258,7 @@ void MainWindow::onSettings()
                           current.startWithWindows, current.rendezvousHosts,
                           node_ ? node_->reachability() : QString(),
                           node_ ? node_->diagnostics() : QString(),
-                          current.useUpnp, current.useDht, current.listenPort,
+                          current.useUpnp, current.useDht, current.dhtFallback, current.firewallProfiles, current.listenPort,
                           current.publicAddress, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
@@ -1283,6 +1285,8 @@ void MainWindow::onSettings()
     values.rendezvousHosts = dialog.rendezvousHosts();
     values.useUpnp = dialog.useUpnp();
     values.useDht = dialog.useDht();
+    values.dhtFallback = dialog.dhtFallback();
+    values.firewallProfiles = dialog.firewallProfiles();
     values.listenPort = dialog.listenPort();
     values.publicAddress = dialog.publicAddress();
     settings_.save(values, 0);
@@ -1291,6 +1295,20 @@ void MainWindow::onSettings()
         node_->setRendezvousHosts(values.rendezvousHosts);
         node_->setNetworkPreferences(values.listenPort, values.publicAddress, values.useUpnp);
         node_->setDhtEnabled(values.useDht);
+        node_->setDhtFallbackAllowed(values.dhtFallback);
+    }
+
+    if (dialog.firewallRequested() && node_ && node_->isRunning()) {
+        QString firewallError;
+        if (FirewallHelper::installRules(node_->listenPort(), PeerNode::discoveryUdpPort(),
+                                         values.firewallProfiles, &firewallError)) {
+            MeeruDialog::showMessage(this, QString::fromLatin1("Windows Firewall"),
+                                     QString::fromLatin1("Meeru is now allowed through on: ")
+                                         + values.firewallProfiles);
+        } else {
+            MeeruDialog::showMessage(this, QString::fromLatin1("Windows Firewall"),
+                                     QString::fromLatin1("The rules were not added.\n\n") + firewallError);
+        }
     }
 
     if (values.listenPort != current.listenPort) {
@@ -1328,10 +1346,12 @@ void MainWindow::startNetwork()
     connect(node_, SIGNAL(profileReceived(QString,QString,QString,QString)),
             this, SLOT(onPeerProfile(QString,QString,QString,QString)));
     connect(node_, SIGNAL(pictureReceived(QString,QString)), this, SLOT(onPeerPicture(QString,QString)));
+    connect(node_, SIGNAL(dhtEngagedAutomatically()), this, SLOT(onDhtEngaged()));
 
     const AppSettings network = settings_.load();
     node_->setNetworkPreferences(network.listenPort, network.publicAddress, network.useUpnp);
     node_->setDhtEnabled(network.useDht);
+    node_->setDhtFallbackAllowed(network.dhtFallback);
     node_->setRendezvousHosts(network.rendezvousHosts);
 
     // The private key has to be unsealed to prove this identity to peers.
@@ -1363,6 +1383,55 @@ void MainWindow::startNetwork()
     node_->setContacts(roster_.contacts());
     publishProfile();
     publishPictures();
+    checkFirewall();
+}
+
+void MainWindow::checkFirewall()
+{
+    if (!FirewallHelper::isSupported() || !node_ || !node_->isRunning())
+        return;
+
+    const AppSettings values = settings_.load();
+
+    // Checked on every start, not once: a rule can be removed, or left behind
+    // pointing at a port Meeru no longer uses, and either way the program goes
+    // quiet with no explanation. If everything is in order this costs nothing
+    // and says nothing.
+    if (FirewallHelper::rulesPresent(node_->listenPort(), PeerNode::discoveryUdpPort()))
+        return;
+
+    if (!MeeruDialog::confirm(
+            this, QString::fromLatin1("Let contacts reach you"),
+            QString::fromLatin1("Windows blocks incoming connections unless a program is allowed through "
+                                "the firewall, and the prompt it shows on first run is easy to miss. "
+                                "Meeru can add the two rules it needs: one for contacts connecting to you, "
+                                "one for finding people on your own network.\n\n"
+                                "Windows will ask for administrator permission. The rules apply to Meeru "
+                                "alone, on the network types chosen in Settings (currently %1).")
+                .arg(values.firewallProfiles),
+            QString::fromLatin1("Add the rules"))) {
+        return;
+    }
+
+    QString error;
+    if (!FirewallHelper::installRules(node_->listenPort(), PeerNode::discoveryUdpPort(),
+                                      values.firewallProfiles, &error)) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Firewall"),
+                                 QString::fromLatin1("The rules were not added.\n\n") + error
+                                 + QString::fromLatin1("\n\nYou can add them yourself later from "
+                                                       "Settings if contacts cannot reach you."));
+    }
+}
+
+void MainWindow::onDhtEngaged()
+{
+    MeeruDialog::showMessage(
+        this, QString::fromLatin1("Looking further afield"),
+        QString::fromLatin1("Your contact could not be reached on this network, so Meeru has started "
+                            "looking for them through the public distributed network instead.\n\n"
+                            "That means your key and your current address are now published there, where "
+                            "anyone holding your Meeru ID can see when you are online. You can switch this "
+                            "off in Settings if you would rather stay on your own network only."));
 }
 
 void MainWindow::publishProfile()
