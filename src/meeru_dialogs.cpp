@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QHostAddress>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
@@ -474,8 +475,33 @@ void AddContactDialog::onCopyOwnCode()
 
     QApplication::clipboard()->setText(code);
 
+    // A code made only of home addresses works on this network and nowhere
+    // else, which is not obvious to whoever pastes it in another country.
+    bool hasPublicAddress = false;
+    for (int i = 0; i < localEndpoints_.size(); ++i) {
+        const QString host = localEndpoints_.at(i).section(QLatin1Char(':'), 0, 0);
+        const QHostAddress address(host);
+        if (address.protocol() != QAbstractSocket::IPv4Protocol)
+            continue;
+        const quint32 ip = address.toIPv4Address();
+        const bool isPrivate = ((ip & 0xFF000000u) == 0x0A000000u)
+                            || ((ip & 0xFFF00000u) == 0xAC100000u)
+                            || ((ip & 0xFFFF0000u) == 0xC0A80000u)
+                            || ((ip & 0xFFC00000u) == 0x64400000u);
+        if (!isPrivate)
+            hasPublicAddress = true;
+    }
+
     QString message = QString::fromLatin1("Your invite code was copied. Send it however you like: "
                                           "it is signed, so nobody can alter the addresses inside it.\n\n");
+
+    if (!hasPublicAddress) {
+        message += QString::fromLatin1(
+            "Be aware: this code only contains addresses on your own network. Somebody on the same "
+            "network can use it, but somebody in another country cannot reach any of them. For that "
+            "you need the router to open a port (UPnP in Settings), a port forwarded by hand, or the "
+            "worldwide lookup switched on for both of you.\n\n");
+    }
     if (inviteLifetime() <= 0) {
         message += QString::fromLatin1("It never expires, so it will keep working until this device "
                                        "changes address.");

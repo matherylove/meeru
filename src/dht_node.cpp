@@ -691,14 +691,15 @@ void DhtNode::handleResponse(const BencodeValue &message, const QHostAddress &fr
 
 // ----------------------------------------------------------------- lookups
 
-int DhtNode::startLookup(const QByteArray &publicKey, const QByteArray &salt, bool forPut)
+int DhtNode::startLookup(int kind, const QByteArray &target,
+                         const QByteArray &publicKey, const QByteArray &salt)
 {
     Lookup lookup;
     lookup.id = nextLookupId_++;
+    lookup.kind = kind;
     lookup.publicKey = publicKey;
     lookup.salt = salt;
-    lookup.target = targetFor(publicKey, salt);
-    lookup.forPut = forPut;
+    lookup.target = target;
     lookup.found = false;
     lookup.bestSequence = -1;
     lookup.startedAt = QDateTime::currentDateTimeUtc();
@@ -738,7 +739,8 @@ void DhtNode::advanceLookup(int lookupId)
 
         QMap<QByteArray, BencodeValue> arguments;
         arguments.insert("target", BencodeValue::fromString(lookup.target));
-        sendQuery(peer, "get", arguments, lookup.target, lookupId);
+        sendQuery(peer, lookup.kind == LookupDiscover ? "find_node" : "get",
+                  arguments, lookup.target, lookupId);
         ++lookup.outstanding;
     }
 
@@ -753,7 +755,13 @@ void DhtNode::finishLookup(int lookupId)
 
     const Lookup lookup = lookups_.take(lookupId);
 
-    if (lookup.forPut && pendingPuts_.contains(lookupId)) {
+    if (lookup.kind == LookupDiscover) {
+        emit statusChanged(QString::fromLatin1("Connected to %1 nodes of the distributed network")
+                               .arg(contactCount()));
+        return;
+    }
+
+    if (lookup.kind == LookupPut && pendingPuts_.contains(lookupId)) {
         const PendingPut pending = pendingPuts_.take(lookupId);
 
         // Store on the closest nodes that both offered a token and derive
@@ -785,11 +793,20 @@ void DhtNode::finishLookup(int lookupId)
     emit lookupFinished(lookup.publicKey, lookup.salt, lookup.found);
 }
 
+void DhtNode::startDiscovery()
+{
+    if (!running_ || contactCount() == 0)
+        return;
+
+    lastDiscovery_ = QDateTime::currentDateTimeUtc();
+    startLookup(LookupDiscover, nodeId_, QByteArray(), QByteArray());
+}
+
 void DhtNode::get(const QByteArray &publicKey, const QByteArray &salt)
 {
     if (!running_ || publicKey.size() != 32 || salt.size() > kMaxSaltSize)
         return;
-    startLookup(publicKey, salt, false);
+    startLookup(LookupGet, targetFor(publicKey, salt), publicKey, salt);
 }
 
 void DhtNode::put(const QByteArray &publicKey, const QByteArray &salt,
@@ -806,7 +823,7 @@ void DhtNode::put(const QByteArray &publicKey, const QByteArray &salt,
     if (!StdEd25519::verify(signature, publicKey, signingBuffer(salt, sequence, value)))
         return;
 
-    const int lookupId = startLookup(publicKey, salt, true);
+    const int lookupId = startLookup(LookupPut, targetFor(publicKey, salt), publicKey, salt);
 
     PendingPut pending;
     pending.publicKey = publicKey;
@@ -912,5 +929,23 @@ void DhtNode::onMaintenance()
         ready_ = false;
         emit readyChanged(false);
         bootstrap();
+        return;
+    }
+
+    // Keep widening the table: often while joining, occasionally afterwards so
+    // nodes that have gone away are replaced.
+    bool discovering = false;
+    QHash<int, Lookup>::const_iterator lookup = lookups_.constBegin();
+    for (; lookup != lookups_.constEnd(); ++lookup) {
+        if (lookup.value().kind == LookupDiscover) {
+            discovering = true;
+            break;
+        }
+    }
+
+    if (!discovering && contactCount() > 0) {
+        const int waitSeconds = ready_ ? 300 : 5;
+        if (!lastDiscovery_.isValid() || lastDiscovery_.secsTo(now) >= waitSeconds)
+            startDiscovery();
     }
 }

@@ -125,12 +125,18 @@ private:
         QByteArray signature;
     };
 
+    enum LookupKind {
+        LookupDiscover = 0,   // grow the routing table by asking for our own ID
+        LookupGet = 1,
+        LookupPut = 2
+    };
+
     struct Lookup {
         int id;
+        int kind;
         QByteArray target;
         QByteArray publicKey;
         QByteArray salt;
-        bool forPut;
         bool found;
         qint64 bestSequence;
         QDateTime startedAt;
@@ -152,7 +158,12 @@ private:
     QList<DhtContact> closestContacts(const QByteArray &target, int count) const;
     int bucketFor(const QByteArray &id) const;
 
-    int startLookup(const QByteArray &publicKey, const QByteArray &salt, bool forPut);
+    int startLookup(int kind, const QByteArray &target,
+                    const QByteArray &publicKey, const QByteArray &salt);
+
+    // Joining a Kademlia network is not just asking a bootstrap node once: the
+    // table only fills by looking for your own ID and following the answers.
+    void startDiscovery();
     void advanceLookup(int lookupId);
     void finishLookup(int lookupId);
     void considerExternalAddress(const QHostAddress &address, const QByteArray &fromNode);
@@ -180,6 +191,7 @@ private:
     bool nodeIdFromExternal_;
 
     QList<QPair<QString, quint16> > bootstrapQueue_;
+    QDateTime lastDiscovery_;
 };
 
 #endif

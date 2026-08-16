@@ -22,6 +22,19 @@
 
 namespace {
 
+// True for addresses that only mean something inside somebody else's house.
+bool isPrivateAddress(const QHostAddress &address)
+{
+    if (address.protocol() != QAbstractSocket::IPv4Protocol)
+        return false;
+    const quint32 ip = address.toIPv4Address();
+    if ((ip & 0xFF000000u) == 0x0A000000u) return true;   // 10.0.0.0/8
+    if ((ip & 0xFFF00000u) == 0xAC100000u) return true;   // 172.16.0.0/12
+    if ((ip & 0xFFFF0000u) == 0xC0A80000u) return true;   // 192.168.0.0/16
+    if ((ip & 0xFFC00000u) == 0x64400000u) return true;   // 100.64.0.0/10, carrier NAT
+    return false;
+}
+
 const quint16 kDiscoveryPort = 47440;
 const quint16 kFirstListenPort = 47441;
 const int kListenPortRange = 20;
@@ -287,10 +300,11 @@ QString PeerNode::diagnostics() const
     } else if (!dht_) {
         lines.append(QString::fromLatin1("Worldwide lookup (DHT): could not start. %1").arg(dhtStatus_));
     } else if (!dht_->isReady()) {
-        lines.append(QString::fromLatin1("Worldwide lookup (DHT): still joining the network, "
-                                         "%1 nodes known so far.").arg(dht_->nodeCount()));
-        lines.append(QString::fromLatin1("    If this never rises above zero, UDP to the internet is "
-                                         "being blocked and the DHT cannot be used from here."));
+        lines.append(QString::fromLatin1("Worldwide lookup (DHT): still joining, %1 nodes known "
+                                         "(8 are needed).").arg(dht_->nodeCount()));
+        lines.append(QString::fromLatin1("    Stuck at zero means UDP to the internet is blocked here. "
+                                         "Stuck at a low number for more than a minute means the "
+                                         "bootstrap nodes answered but the search is not spreading."));
     } else {
         lines.append(QString::fromLatin1("Worldwide lookup (DHT): connected, %1 nodes known.")
                          .arg(dht_->nodeCount()));
@@ -486,22 +500,48 @@ void PeerNode::reach(const QString &peerId)
     }
 
     // An invite code can carry several addresses: a public one and one or more
-    // on the sender's own network. Try each until something answers.
+    // on the sender's own network. Try each until something answers, but skip
+    // the ones that cannot possibly work from here.
     if (pendingHints_.contains(peerId)) {
         const QStringList hints = pendingHints_.value(peerId)
                                       .split(QLatin1Char(','), QString::SkipEmptyParts);
+        int usable = 0;
+        int privateSkipped = 0;
+
         for (int i = 0; i < hints.size(); ++i) {
             QString host;
             quint16 port = 0;
             parseEndpointHint(hints.at(i).trimmed(), &host, &port);
             if (host.isEmpty() || port == 0)
                 continue;
+
+            // A private address belongs to the other person's own network. If
+            // they are not on ours too, dialling it reaches nothing here, or
+            // worse, reaches an unrelated machine that happens to have that
+            // address on our side.
+            const QHostAddress candidate(host);
+            if (isPrivateAddress(candidate) && !endpoints_.contains(peerId)) {
+                ++privateSkipped;
+                continue;
+            }
+
             PeerEndpoint endpoint;
             endpoint.host = host;
             endpoint.port = port;
             connectTo(peerId, endpoint);
+            ++usable;
         }
-        return;
+
+        if (usable > 0)
+            return;
+
+        if (privateSkipped > 0) {
+            lastError_ = QString::fromLatin1(
+                "The only addresses given for that contact are on their own home network, which cannot "
+                "be reached from here. They need a public address, which means UPnP or a forwarded "
+                "port on their side, or both of you need the worldwide lookup switched on.");
+            lastErrorAt_ = QDateTime::currentDateTimeUtc();
+        }
     }
 
     announce(true);
