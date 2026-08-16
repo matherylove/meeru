@@ -276,6 +276,12 @@ void LoginWindow::reloadIdentities() {
 
     if (pathsReady_) {
         IdentityStore store(paths_);
+
+        // Identities created before a Meeru ID became the public key itself
+        // carry an ID that no longer matches their key, which breaks every
+        // connection without saying so. Repair them before listing.
+        store.migrateLegacyIdentities();
+
         identities_ = store.listIdentities();
 
         const QString active = store.activeIdentityId();

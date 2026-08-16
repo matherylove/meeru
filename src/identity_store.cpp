@@ -120,6 +120,73 @@ bool IdentityStore::activate(const QString &identityId, LocalProfile *profile, Q
     return true;
 }
 
+int IdentityStore::migrateLegacyIdentities() const
+{
+    QDir root(paths_.identities());
+    if (!root.exists())
+        return 0;
+
+    int migrated = 0;
+    const QStringList entries = root.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+
+    for (int i = 0; i < entries.size(); ++i) {
+        const QString oldId = entries.at(i);
+
+        QFile file(paths_.identityDirectory(oldId) + QLatin1String("/profile.json"));
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+        const QJsonObject object = QJsonDocument::fromJson(file.readAll()).object();
+        file.close();
+
+        const QByteArray edPublic = bytes(object.value("ed25519PublicKey").toString());
+        if (edPublic.size() != 32)
+            continue;
+
+        const QString correctId = IdentityCrypto::identityIdFor(edPublic);
+        if (correctId.isEmpty() || correctId == oldId)
+            continue;   // already in the current format
+
+        // Re-signing needs the private key, so an identity that cannot be
+        // unlocked here is left untouched rather than half converted.
+        IdentityMaterial material;
+        if (!unlock(oldId, &material, 0))
+            continue;
+
+        const QString oldDirectory = paths_.identityDirectory(oldId);
+        const QString newDirectory = paths_.identityDirectory(correctId);
+        if (QDir(newDirectory).exists() || !QDir().rename(oldDirectory, newDirectory)) {
+            material.clear();
+            continue;
+        }
+
+        LocalProfile profile;
+        profile.formatVersion = object.value("formatVersion").toInt();
+        profile.identityId = correctId;
+        profile.deviceId = object.value("deviceId").toString();
+        profile.displayName = object.value("displayName").toString();
+        profile.presence = object.value("presence").toString();
+        profile.createdAt = QDateTime::fromString(object.value("createdAt").toString(), Qt::ISODate);
+        profile.updatedAt = QDateTime::currentDateTimeUtc();
+        profile.edPublic = edPublic;
+        profile.xPublic = bytes(object.value("x25519PublicKey").toString());
+        profile.signature = IdentityCrypto::profileSignature(material, canonicalPayload(profile));
+        material.clear();
+
+        if (profile.signature.size() != 64 || !writeProfile(profile, 0)) {
+            // Put it back where it was rather than leaving it stranded.
+            QDir().rename(newDirectory, oldDirectory);
+            continue;
+        }
+
+        if (activeIdentityId() == oldId)
+            saveActive(correctId, 0);
+
+        ++migrated;
+    }
+
+    return migrated;
+}
+
 bool IdentityStore::deleteIdentity(const QString &identityId, QString *error) const
 {
     QDir directory(paths_.identityDirectory(identityId));
@@ -389,6 +456,13 @@ bool IdentityStore::loadProfile(const QString &identityId, LocalProfile *profile
     // A profile that does not verify against its own key has been tampered
     // with or corrupted; refuse it rather than logging the user in.
     if (!IdentityCrypto::verifySignature(result.edPublic, canonicalPayload(result), result.signature))
+        return false;
+
+    // The ID has to be this profile's own public key. Without this check an
+    // identity in an older format loads happily and then fails every single
+    // connection, because the far end derives the ID from the key and gets a
+    // different answer.
+    if (IdentityCrypto::identityIdFor(result.edPublic) != result.identityId)
         return false;
 
     *profile = result;

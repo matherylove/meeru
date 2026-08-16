@@ -107,7 +107,9 @@ PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
       mapper_(0),
       rendezvous_(0),
       preferredPort_(0),
-      useUpnp_(true)
+      useUpnp_(true),
+      connectionAttempts_(0),
+      handshakeFailures_(0)
 {
 }
 
@@ -233,6 +235,59 @@ void PeerNode::setRendezvousHosts(const QStringList &hosts)
             rendezvous_->start(profile_.identityId, material_, hosts, listenPort_);
         publishEndpoints();
     }
+}
+
+QString PeerNode::diagnostics() const
+{
+    QStringList lines;
+
+    if (!running_) {
+        lines.append(QString::fromLatin1("The engine is not running."));
+        return lines.join(QString::fromLatin1("\n"));
+    }
+
+    lines.append(QString::fromLatin1("Listening for contacts on TCP port %1.").arg(listenPort_));
+    lines.append(discovery_
+        ? QString::fromLatin1("Local network discovery is on (UDP port %1).").arg(kDiscoveryPort)
+        : QString::fromLatin1("Local network discovery could NOT open its UDP port."));
+
+    lines.append(QString::fromLatin1("Meeru users seen on this network: %1.").arg(endpoints_.size()));
+    QHash<QString, PeerEndpoint>::const_iterator it = endpoints_.constBegin();
+    for (; it != endpoints_.constEnd(); ++it) {
+        lines.append(QString::fromLatin1("    %1 at %2%3")
+                         .arg(it.value().name.isEmpty() ? it.key().left(12) : it.value().name)
+                         .arg(it.value().toString())
+                         .arg(sessions_.contains(it.key()) ? QString::fromLatin1("  (connected)")
+                                                           : QString()));
+    }
+
+    int established = 0;
+    QHash<QString, PeerSession *>::const_iterator session = sessions_.constBegin();
+    for (; session != sessions_.constEnd(); ++session) {
+        if (session.value()->isEstablished())
+            ++established;
+    }
+    lines.append(QString::fromLatin1("Connections established: %1.").arg(established));
+    lines.append(QString::fromLatin1("Connection attempts made: %1.").arg(connectionAttempts_));
+    lines.append(QString::fromLatin1("Requests waiting to be delivered: %1.").arg(pendingRequests_.size()));
+
+    if (handshakeFailures_ > 0) {
+        lines.append(QString::fromLatin1("Refused handshakes: %1.").arg(handshakeFailures_));
+        lines.append(QString::fromLatin1("Last problem: %1").arg(lastError_));
+    }
+
+    if (endpoints_.isEmpty() && connectionAttempts_ == 0) {
+        lines.append(QString::fromLatin1(
+            "\nNobody has been seen and nothing has been dialled. If the other computer is on this "
+            "same network and also running Meeru, the usual cause is Windows Firewall blocking Meeru, "
+            "or the network being marked as Public. Allow Meeru on private networks on both machines."));
+    } else if (connectionAttempts_ > 0 && established == 0) {
+        lines.append(QString::fromLatin1(
+            "\nThe other computer was found but the connection did not complete. That points at the "
+            "firewall on the receiving side blocking incoming connections on the port above."));
+    }
+
+    return lines.join(QString::fromLatin1("\n"));
 }
 
 QString PeerNode::reachability() const
@@ -686,6 +741,7 @@ void PeerNode::connectTo(const QString &peerId, const PeerEndpoint &endpoint)
     if (attempts >= 4)
         return;
 
+    ++connectionAttempts_;
     QTcpSocket *socket = new QTcpSocket(this);
     connecting_.insert(socket, peerId);
     connect(socket, SIGNAL(connected()), this, SLOT(onOutgoingConnected()));
@@ -730,6 +786,9 @@ void PeerNode::adopt(QTcpSocket *socket, bool initiator, const QString &expected
     connect(session, SIGNAL(failed(QString,QString)), this, SLOT(onSessionFailed(QString,QString)));
     connect(session, SIGNAL(controlReceived(QString,QJsonObject,QByteArray)),
             this, SLOT(onSessionMessage(QString,QJsonObject,QByteArray)));
+
+    // Only now is it safe to let the handshake run.
+    session->begin();
 }
 
 void PeerNode::onSessionEstablished(const QString &peerId)
@@ -763,6 +822,7 @@ void PeerNode::onSessionEstablished(const QString &peerId)
     if (pendingRequests_.contains(peerId)) {
         QJsonObject request;
         request.insert("type", QString::fromLatin1(kMsgTrustRequest));
+        request.insert("displayName", profile_.displayName);
         request.insert("message", pendingRequests_.value(peerId));
         session->sendControl(request);
         pendingRequests_.remove(peerId);
@@ -779,7 +839,15 @@ void PeerNode::onSessionEstablished(const QString &peerId)
 
 void PeerNode::onSessionFailed(const QString &peerId, const QString &reason)
 {
-    Q_UNUSED(reason);
+    // Surfaced rather than swallowed: a refused handshake is exactly the kind
+    // of failure that otherwise looks like "nothing happens at all".
+    if (!reason.isEmpty() && reason != QLatin1String("The connection closed")) {
+        ++handshakeFailures_;
+        lastError_ = reason;
+        lastErrorAt_ = QDateTime::currentDateTimeUtc();
+        emit statusChanged(reason);
+    }
+
     PeerSession *session = qobject_cast<PeerSession *>(sender());
     if (session) {
         if (!peerId.isEmpty() && sessions_.value(peerId) == session)
@@ -844,6 +912,7 @@ bool PeerNode::requestContact(const QString &peerId, const QString &endpointHint
     if (session && session->isEstablished()) {
         QJsonObject request;
         request.insert("type", QString::fromLatin1(kMsgTrustRequest));
+        request.insert("displayName", profile_.displayName);
         request.insert("message", message);
         session->sendControl(request);
         pendingRequests_.remove(peerId);

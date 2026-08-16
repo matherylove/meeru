@@ -1,6 +1,7 @@
 #ifndef MEERU_PEER_NODE_H
 #define MEERU_PEER_NODE_H
 
+#include <QDateTime>
 #include <QHash>
 #include <QList>
 #include <QObject>
@@ -66,6 +67,10 @@ public:
     // there means putting your key beside your IP on strangers' machines.
     void setDhtEnabled(bool enabled);
     QString reachability() const;
+
+    // A plain account of what the engine is actually doing, so a connection
+    // that silently does nothing can be told apart from one that is blocked.
+    QString diagnostics() const;
     void stop();
     bool isRunning() const;
     quint16 listenPort() const { return listenPort_; }
@@ -164,6 +169,10 @@ private:
     QString externalAddress_;      // learnt from the router
     QString manualAddress_;        // given by the user
     QString rendezvousStatus_;
+    QString lastError_;
+    QDateTime lastErrorAt_;
+    int connectionAttempts_;
+    int handshakeFailures_;
     int preferredPort_;
     bool useUpnp_;
 };

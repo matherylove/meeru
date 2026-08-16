@@ -963,6 +963,14 @@ void MainWindow::addContactsEntry()
         node_->requestContact(contact.id, contact.endpointHint,
                               QString::fromLatin1("%1 would like to add you on Meeru.")
                                   .arg(profile_.displayName), 0);
+    } else {
+        // The contact is saved either way, but saying "sent" when nothing left
+        // this computer would be a lie.
+        MeeruDialog::showMessage(this, QString::fromLatin1("Add a contact"),
+                                 QString::fromLatin1("The contact was saved, but Meeru is not connected to "
+                                                     "any network right now, so the request has not gone "
+                                                     "anywhere yet. It will be delivered once a connection "
+                                                     "is possible."));
     }
 
     currentTab_ = ContactsTab;
@@ -1247,6 +1255,7 @@ void MainWindow::onSettings()
     SettingsDialog dialog(profile_.displayName, profile_.identityId, paths_.root(),
                           current.startWithWindows, current.rendezvousHosts,
                           node_ ? node_->reachability() : QString(),
+                          node_ ? node_->diagnostics() : QString(),
                           current.useUpnp, current.useDht, current.listenPort,
                           current.publicAddress, this);
     if (dialog.exec() != QDialog::Accepted)

@@ -797,13 +797,15 @@ SettingsDialog::SettingsDialog(const QString &displayName,
                                bool startWithWindows,
                                const QStringList &rendezvousHosts,
                                const QString &reachability,
+                               const QString &diagnostics,
                                bool useUpnp,
                                bool useDht,
                                int listenPort,
                                const QString &publicAddress,
                                QWidget *parent)
     : MeeruDialog(QString::fromLatin1("Settings"), parent),
-      identityId_(identityId), folder_(folder), nameEdit_(0), startupBox_(0),
+      identityId_(identityId), folder_(folder), diagnostics_(diagnostics),
+      nameEdit_(0), startupBox_(0),
       rendezvousEdit_(0), upnpBox_(0), dhtBox_(0), portEdit_(0), publicEdit_(0)
 {
     setDialogWidth(400);
@@ -821,10 +823,15 @@ SettingsDialog::SettingsDialog(const QString &displayName,
 
     // --- how this device is reached from outside
     contentLayout()->addWidget(fieldLabel(QString::fromLatin1("HOW PEOPLE REACH YOU"), this));
-    contentLayout()->addWidget(bodyLabel(QString::fromLatin1("Status: ")
-                                         + (reachability.isEmpty()
-                                                ? QString::fromLatin1("unknown")
-                                                : reachability), this));
+    QHBoxLayout *statusRow = new QHBoxLayout();
+    statusRow->addWidget(bodyLabel(QString::fromLatin1("Status: ")
+                                   + (reachability.isEmpty()
+                                          ? QString::fromLatin1("unknown")
+                                          : reachability), this), 1);
+    QPushButton *diagnose = new QPushButton(QString::fromLatin1("Details"), this);
+    statusRow->addWidget(diagnose);
+    contentLayout()->addLayout(statusRow);
+    connect(diagnose, SIGNAL(clicked()), this, SLOT(onShowDiagnostics()));
 
     upnpBox_ = new QCheckBox(QString::fromLatin1("Let Meeru ask the router to open a port (UPnP)"), this);
     upnpBox_->setChecked(useUpnp);
@@ -965,6 +972,14 @@ QStringList SettingsDialog::rendezvousHosts() const
             hosts.append(host);
     }
     return hosts;
+}
+
+void SettingsDialog::onShowDiagnostics()
+{
+    MeeruDialog::showMessage(this, QString::fromLatin1("Connection details"),
+                             diagnostics_.isEmpty()
+                                 ? QString::fromLatin1("The network engine is not running.")
+                                 : diagnostics_);
 }
 
 void SettingsDialog::onCopyId()

@@ -192,6 +192,7 @@ public:
                    bool startWithWindows,
                    const QStringList &rendezvousHosts,
                    const QString &reachability,
+                   const QString &diagnostics,
                    bool useUpnp,
                    bool useDht,
                    int listenPort,
@@ -210,10 +211,12 @@ public:
 private slots:
     void onCopyId();
     void onOpenFolder();
+    void onShowDiagnostics();
 
 private:
     QString identityId_;
     QString folder_;
+    QString diagnostics_;
     QLineEdit *nameEdit_;
     QCheckBox *startupBox_;
     QLineEdit *rendezvousEdit_;

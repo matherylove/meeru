@@ -40,6 +40,12 @@ public:
     // Switches which identity the login screen opens by default.
     bool activate(const QString &identityId, LocalProfile *profile, QString *error = 0) const;
 
+    // Repairs identities created before a Meeru ID became the public key
+    // itself. Their stored ID no longer matches their key, which silently
+    // breaks every connection, so they are renamed and re-signed on startup.
+    // A no-op for identities that are already correct.
+    int migrateLegacyIdentities() const;
+
     // Erases an identity from this computer, keys included.
     bool deleteIdentity(const QString &identityId, QString *error) const;
 

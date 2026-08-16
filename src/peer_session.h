@@ -40,6 +40,12 @@ public:
                 QObject *parent = 0);
     ~PeerSession();
 
+    // Starts the handshake. Kept separate from the constructor so the owner
+    // can connect to the signals first: the exchange can complete, or fail,
+    // before the constructor would have returned, and anything emitted then
+    // would be shouted into an empty room.
+    void begin();
+
     QString peerId() const { return peerId_; }
     QString peerAddress() const;
     bool isEstablished() const { return stage_ == Established; }

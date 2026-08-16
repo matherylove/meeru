@@ -88,11 +88,18 @@ PeerSession::PeerSession(QTcpSocket *socket,
     connect(timeout_, SIGNAL(timeout()), this, SLOT(onTimeout()));
     timeout_->start();
 
+}
+
+void PeerSession::begin()
+{
+    if (stage_ != WaitingHello)
+        return;
+
     sendHello();
 
-    // Bytes may already be waiting if the socket was handed over after the
-    // peer wrote immediately; readyRead would never fire for those.
-    if (socket_->bytesAvailable() > 0)
+    // Bytes may already be waiting if the peer wrote before we adopted the
+    // socket; readyRead would never fire for those.
+    if (socket_ && socket_->bytesAvailable() > 0)
         onReadyRead();
 }
 
