@@ -194,12 +194,9 @@ public:
                    const QString &identityId,
                    const QString &folder,
                    bool startWithWindows,
-                   const QStringList &rendezvousHosts,
                    const QString &reachability,
                    const QString &diagnostics,
                    bool useUpnp,
-                   bool useDht,
-                   bool dhtFallback,
                    const QString &firewallProfiles,
                    int listenPort,
                    const QString &publicAddress,
@@ -207,11 +204,8 @@ public:
 
     QString displayName() const;
     bool startWithWindows() const;
-    QStringList rendezvousHosts() const;
 
     bool useUpnp() const;
-    bool useDht() const;
-    bool dhtFallback() const;
 
     QString firewallProfiles() const;
     bool firewallRequested() const { return firewallRequested_; }
@@ -230,10 +224,7 @@ private:
     QString diagnostics_;
     QLineEdit *nameEdit_;
     QCheckBox *startupBox_;
-    QLineEdit *rendezvousEdit_;
     QCheckBox *upnpBox_;
-    QCheckBox *dhtBox_;
-    QCheckBox *dhtFallbackBox_;
     QCheckBox *firewallPrivateBox_;
     QCheckBox *firewallDomainBox_;
     QCheckBox *firewallPublicBox_;

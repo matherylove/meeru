@@ -14,10 +14,8 @@
 #include <QUdpSocket>
 
 #include "avatar.h"
-#include "dht_directory.h"
 #include "peer_session.h"
 #include "port_mapper.h"
-#include "rendezvous.h"
 #include "presence.h"
 
 namespace {
@@ -35,6 +33,34 @@ bool isPrivateAddress(const QHostAddress &address)
     return false;
 }
 
+// The address Windows gives itself when no DHCP server answered. It reaches
+// nothing, not even the machine next to it, and announcing one only sends
+// contacts chasing an address that cannot work.
+bool isSelfAssignedAddress(const QHostAddress &address)
+{
+    if (address.protocol() != QAbstractSocket::IPv4Protocol)
+        return false;
+    return (address.toIPv4Address() & 0xFFFF0000u) == 0xA9FE0000u;   // 169.254.0.0/16
+}
+
+// Meeru is a local network messenger, and a virtual adapter from Hamachi,
+// ZeroTier or a VPN is a local network as far as it is concerned. Those are
+// often exactly the interface a contact is reachable on, so they are ranked
+// ahead of an ordinary card rather than buried behind it.
+bool looksLikeVirtualNetwork(const QNetworkInterface &interface)
+{
+    const QString name = (interface.humanReadableName() + QLatin1Char(' ')
+                          + interface.name()).toLower();
+    static const char *hints[] = { "hamachi", "zerotier", "radmin", "tailscale",
+                                   "tap-windows", "tap adapter", "wireguard",
+                                   "openvpn", "vpn", "virtual" };
+    for (int i = 0; i < 10; ++i) {
+        if (name.contains(QString::fromLatin1(hints[i])))
+            return true;
+    }
+    return false;
+}
+
 const quint16 kDiscoveryPort = 47440;
 const quint16 kFirstListenPort = 47441;
 const int kListenPortRange = 20;
@@ -43,19 +69,29 @@ const int kReconnectIntervalMs = 20000;
 const int kMaxPictureBytes = 3 * 1024 * 1024;
 const int kMaxPortNumber = 65535;
 const int kConnectTimeoutMs = 8000;
-const int kDhtFallbackSeconds = 10;
 
 const char kMsgProfile[] = "profile";
 const char kMsgTrustRequest[] = "trust-request";
 const char kMsgTrustAccepted[] = "trust-accepted";
 const char kMsgPicture[] = "picture";
 const char kMsgPictureRequest[] = "picture-request";
+const char kMsgChat[] = "chat";
+const char kMsgChatAck[] = "chat-ack";
+const char kMsgHistoryRequest[] = "history-request";
+const char kMsgTyping[] = "typing";
 
 QString peerDirectory(const MeeruPaths &paths, const QString &ownerId, const QString &peerId)
 {
     return paths.identityDirectory(ownerId) + QLatin1String("/peers/") + peerId;
 }
 
+}
+
+// The conversation a pair of people share is named after both of them, so the
+// two sides arrive at the same name without having to agree on one.
+QString PeerNode::directConversationId(const QString &a, const QString &b)
+{
+    return (a < b) ? (a + QLatin1Char('|') + b) : (b + QLatin1Char('|') + a);
 }
 
 quint16 PeerNode::discoveryUdpPort()
@@ -116,18 +152,14 @@ QString PeerNode::parseEndpointHint(const QString &value, QString *host, quint16
 PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
     : QObject(parent),
       paths_(paths),
+      messages_(0),
       server_(0),
       discovery_(0),
       announceTimer_(0),
       reconnectTimer_(0),
       listenPort_(0),
       running_(false),
-      dht_(0),
-      dhtEnabled_(false),
-      dhtFallbackAllowed_(true),
-      dhtStartedAutomatically_(false),
       mapper_(0),
-      rendezvous_(0),
       preferredPort_(0),
       useUpnp_(true),
       connectionAttempts_(0),
@@ -209,8 +241,8 @@ bool PeerNode::start(const LocalProfile &profile, const IdentityMaterial &materi
 
     running_ = true;
 
-    // Two ways to be reachable from outside: ask the router to forward the
-    // port, and register with a rendezvous node that can relay when it cannot.
+    // One way to be reachable from outside: ask the router to forward the port.
+    // If it refuses, the user can forward one by hand in Settings instead.
     if (useUpnp_) {
         mapper_ = new PortMapper(this);
         connect(mapper_, SIGNAL(mapped(QString)), this, SLOT(onPortMapped(QString)));
@@ -218,47 +250,10 @@ bool PeerNode::start(const LocalProfile &profile, const IdentityMaterial &materi
         mapper_->requestMapping(listenPort_);
     }
 
-    if (dhtEnabled_) {
-        dht_ = new DhtDirectory(this);
-        connect(dht_, SIGNAL(peerLocated(QString,QStringList)), this, SLOT(onPeerLocated(QString,QStringList)));
-        connect(dht_, SIGNAL(peerNotFound(QString)), this, SLOT(onPeerNotFound(QString)));
-        connect(dht_, SIGNAL(statusChanged(QString)), this, SLOT(onDhtStatus(QString)));
-
-        QString dhtError;
-        if (!dht_->start(profile_.identityId, material_, listenPort_, &dhtError)) {
-            dhtStatus_ = dhtError;
-            delete dht_;
-            dht_ = 0;
-        }
-    }
-
-    rendezvous_ = new RendezvousClient(this);
-    connect(rendezvous_, SIGNAL(relayedSocket(QString,QTcpSocket*,bool)),
-            this, SLOT(onRelayedSocket(QString,QTcpSocket*,bool)));
-    connect(rendezvous_, SIGNAL(directCandidates(QString,QStringList)),
-            this, SLOT(onDirectCandidates(QString,QStringList)));
-    connect(rendezvous_, SIGNAL(statusChanged(QString)), this, SLOT(onRendezvousStatus(QString)));
-    connect(rendezvous_, SIGNAL(peerUnreachable(QString,QString)),
-            this, SLOT(onPeerUnreachable(QString,QString)));
-    if (!rendezvousHosts_.isEmpty())
-        rendezvous_->start(profile_.identityId, material_, rendezvousHosts_, listenPort_);
-    publishEndpoints();
 
     announce(true);
     emitStatus();
     return true;
-}
-
-void PeerNode::setRendezvousHosts(const QStringList &hosts)
-{
-    rendezvousHosts_ = hosts;
-    if (running_ && rendezvous_) {
-        if (hosts.isEmpty())
-            rendezvous_->stop();
-        else
-            rendezvous_->start(profile_.identityId, material_, hosts, listenPort_);
-        publishEndpoints();
-    }
 }
 
 QString PeerNode::diagnostics() const
@@ -296,29 +291,6 @@ QString PeerNode::diagnostics() const
     lines.append(QString::fromLatin1("Incoming connections received: %1.").arg(inboundConnections_));
     lines.append(QString::fromLatin1("Requests waiting to be delivered: %1.").arg(pendingRequests_.size()));
 
-    lines.append(QString());
-    if (!dhtEnabled_ && !dht_) {
-        lines.append(QString::fromLatin1("Worldwide lookup (DHT): switched off."));
-    } else if (!dht_) {
-        lines.append(QString::fromLatin1("Worldwide lookup (DHT): could not start. %1").arg(dhtStatus_));
-    } else if (!dht_->isReady()) {
-        lines.append(QString::fromLatin1("Worldwide lookup (DHT): still joining, %1 nodes known "
-                                         "(8 are needed).").arg(dht_->nodeCount()));
-        lines.append(QString::fromLatin1("    Stuck at zero means UDP to the internet is blocked here. "
-                                         "Stuck at a low number for more than a minute means the "
-                                         "bootstrap nodes answered but the search is not spreading."));
-    } else {
-        lines.append(QString::fromLatin1("Worldwide lookup (DHT): connected, %1 nodes known.")
-                         .arg(dht_->nodeCount()));
-        if (!dht_->externalAddress().isEmpty())
-            lines.append(QString::fromLatin1("    Seen from the internet as %1.").arg(dht_->externalAddress()));
-        lines.append(dht_->isPublished()
-            ? QString::fromLatin1("    Findable worldwide: published to %1 nodes.")
-                  .arg(dht_->publishedNodeCount())
-            : QString::fromLatin1("    Not published yet, so nobody can look this device up."));
-    }
-    lines.append(QString());
-
     if (connectionFailures_ > 0)
         lines.append(QString::fromLatin1("Failed connections: %1.").arg(connectionFailures_));
     if (handshakeFailures_ > 0)
@@ -331,9 +303,9 @@ QString PeerNode::diagnostics() const
             "\nNothing to report yet: no request has needed sending."));
     } else if (connectionAttempts_ == 0) {
         lines.append(QString::fromLatin1(
-            "\nThere is a request waiting but no address to send it to. Nobody was found on this "
-            "network, and the worldwide lookup has not produced an address either. Both sides need "
-            "the DHT switched on for a contact in another country to be found."));
+            "\nThere is a request waiting but no address to send it to. Nobody with that ID was "
+            "found on this network. To reach somebody outside it, Meeru needs an address: paste "
+            "their invite code, which carries one, or type it in the address field."));
     } else if (established == 0 && !endpoints_.isEmpty()) {
         lines.append(QString::fromLatin1(
             "\nThe other computer was found on this network but the connection did not complete. "
@@ -369,10 +341,6 @@ QString PeerNode::reachability() const
     if (!externalAddress_.isEmpty())
         return QString::fromLatin1("Reachable at ") + externalAddress_
              + QString::fromLatin1(" (opened by your router)");
-    if (dht_ && dht_->isReady() && !dhtStatus_.isEmpty())
-        return dhtStatus_;
-    if (!rendezvousStatus_.isEmpty())
-        return rendezvousStatus_;
     return QString::fromLatin1("Local network only");
 }
 
@@ -409,35 +377,45 @@ QStringList PeerNode::localEndpoints() const
     if (!externalAddress_.isEmpty() && !endpoints.contains(externalAddress_))
         endpoints.append(externalAddress_);
 
+    // Virtual adapters first, then ordinary ones. Nothing self-assigned, and
+    // nothing from an interface that is not actually up.
+    QStringList virtualEndpoints;
+    QStringList ordinaryEndpoints;
+
     const QList<QNetworkInterface> interfaces = QNetworkInterface::allInterfaces();
     for (int i = 0; i < interfaces.size(); ++i) {
-        const QList<QNetworkAddressEntry> entries = interfaces.at(i).addressEntries();
+        const QNetworkInterface &interface = interfaces.at(i);
+        if (!(interface.flags() & QNetworkInterface::IsUp)
+            || !(interface.flags() & QNetworkInterface::IsRunning)
+            || (interface.flags() & QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+
+        const bool isVirtual = looksLikeVirtualNetwork(interface);
+        const QList<QNetworkAddressEntry> entries = interface.addressEntries();
         for (int j = 0; j < entries.size(); ++j) {
             const QHostAddress ip = entries.at(j).ip();
             if (ip.protocol() != QAbstractSocket::IPv4Protocol || ip.isLoopback())
                 continue;
-            endpoints.append(ip.toString() + QLatin1Char(':') + QString::number(listenPort_));
+            if (isSelfAssignedAddress(ip))
+                continue;
+
+            const QString endpoint = ip.toString() + QLatin1Char(':') + QString::number(listenPort_);
+            if (isVirtual)
+                virtualEndpoints.append(endpoint);
+            else
+                ordinaryEndpoints.append(endpoint);
         }
     }
+
+    endpoints += virtualEndpoints;
+    endpoints += ordinaryEndpoints;
     return endpoints;
-}
-
-void PeerNode::publishEndpoints()
-{
-    if (!rendezvous_ && !dht_)
-        return;
-
-    const QStringList endpoints = localEndpoints();
-    if (rendezvous_)
-        rendezvous_->setLocalEndpoints(endpoints);
-    if (dht_)
-        dht_->setLocalEndpoints(endpoints);
 }
 
 void PeerNode::onPortMapped(const QString &externalAddress)
 {
     externalAddress_ = externalAddress;
-    publishEndpoints();
     emitStatus();
 }
 
@@ -449,58 +427,9 @@ void PeerNode::onPortMappingFailed(const QString &reason)
     emitStatus();
 }
 
-void PeerNode::onRendezvousStatus(const QString &summary)
-{
-    rendezvousStatus_ = summary;
-    emitStatus();
-}
 
-void PeerNode::onPeerUnreachable(const QString &peerId, const QString &reason)
-{
-    Q_UNUSED(reason);
-    if (peerId.isEmpty() || sessions_.contains(peerId))
-        return;
 
-    // The relay could not reach them. The DHT is the remaining way to find
-    // out where they are, so the ladder runs in both directions rather than
-    // ending here.
-    if (dht_ && dht_->isReady())
-        dht_->locate(peerId);
-}
 
-void PeerNode::onDirectCandidates(const QString &peerId, const QStringList &endpoints)
-{
-    // The rendezvous told us where that contact thinks it can be reached, so
-    // try a direct link before settling for the relayed one.
-    if (sessions_.contains(peerId))
-        return;
-
-    for (int i = 0; i < endpoints.size(); ++i) {
-        QString host;
-        quint16 port = 0;
-        parseEndpointHint(endpoints.at(i), &host, &port);
-        if (host.isEmpty() || port == 0)
-            continue;
-        PeerEndpoint endpoint;
-        endpoint.host = host;
-        endpoint.port = port;
-        connectTo(peerId, endpoint);
-        return;
-    }
-}
-
-void PeerNode::onRelayedSocket(const QString &peerId, QTcpSocket *socket, bool initiator)
-{
-    if (!socket)
-        return;
-    if (sessions_.contains(peerId)) {
-        socket->abort();
-        socket->deleteLater();
-        return;
-    }
-    socket->setParent(this);
-    adopt(socket, initiator, peerId);
-}
 
 // Tries the cheapest route first and falls back to the relay.
 void PeerNode::reach(const QString &peerId)
@@ -535,6 +464,10 @@ void PeerNode::reach(const QString &peerId)
             // worse, reaches an unrelated machine that happens to have that
             // address on our side.
             const QHostAddress candidate(host);
+            if (isSelfAssignedAddress(candidate)) {
+                ++privateSkipped;
+                continue;   // reaches nothing, anywhere, ever
+            }
             if (isPrivateAddress(candidate) && !endpoints_.contains(peerId)) {
                 ++privateSkipped;
                 continue;
@@ -552,99 +485,22 @@ void PeerNode::reach(const QString &peerId)
 
         if (privateSkipped > 0) {
             lastError_ = QString::fromLatin1(
-                "The only addresses given for that contact are on their own home network, which cannot "
-                "be reached from here. They need a public address, which means UPnP or a forwarded "
-                "port on their side, or both of you need the worldwide lookup switched on.");
+                "The only addresses given for that contact are on their own home network, which "
+                "cannot be reached from here. They need a public address: either their router opens "
+                "one through UPnP, or they forward a port by hand in Settings.");
             lastErrorAt_ = QDateTime::currentDateTimeUtc();
         }
     }
 
+    // Nothing known and nothing to ask: announce once more in case they only
+    // just appeared on this network.
     announce(true);
-
-    // Ask the DHT where they are. Its answer arrives asynchronously and comes
-    // back through onPeerLocated, which then dials them directly.
-    if (dht_ && dht_->isReady())
-        dht_->locate(peerId);
-
-    if (rendezvous_ && rendezvous_->isConnected())
-        rendezvous_->requestConnection(peerId);
 }
 
-void PeerNode::setDhtFallbackAllowed(bool allowed)
-{
-    dhtFallbackAllowed_ = allowed;
-}
 
-void PeerNode::setDhtEnabled(bool enabled)
-{
-    if (dhtEnabled_ == enabled)
-        return;
-    dhtEnabled_ = enabled;
 
-    if (!running_)
-        return;
 
-    if (!enabled) {
-        if (dht_) {
-            dht_->stop();
-            delete dht_;
-            dht_ = 0;
-        }
-        dhtStatus_ = QString::fromLatin1("Not published");
-        emitStatus();
-        return;
-    }
 
-    dht_ = new DhtDirectory(this);
-    connect(dht_, SIGNAL(peerLocated(QString,QStringList)), this, SLOT(onPeerLocated(QString,QStringList)));
-    connect(dht_, SIGNAL(peerNotFound(QString)), this, SLOT(onPeerNotFound(QString)));
-    connect(dht_, SIGNAL(statusChanged(QString)), this, SLOT(onDhtStatus(QString)));
-
-    QString dhtError;
-    if (!dht_->start(profile_.identityId, material_, listenPort_, &dhtError)) {
-        dhtStatus_ = dhtError;
-        delete dht_;
-        dht_ = 0;
-        return;
-    }
-    publishEndpoints();
-}
-
-void PeerNode::onPeerLocated(const QString &peerId, const QStringList &endpoints)
-{
-    if (sessions_.contains(peerId))
-        return;
-
-    // Everything here was signed by the contact's own key before the DHT layer
-    // would hand it over, so these addresses genuinely came from them.
-    for (int i = 0; i < endpoints.size(); ++i) {
-        QString host;
-        quint16 port = 0;
-        parseEndpointHint(endpoints.at(i), &host, &port);
-        if (host.isEmpty() || port == 0)
-            continue;
-        PeerEndpoint endpoint;
-        endpoint.host = host;
-        endpoint.port = port;
-        endpoints_.insert(peerId, endpoint);
-        connectTo(peerId, endpoint);
-    }
-}
-
-void PeerNode::onPeerNotFound(const QString &peerId)
-{
-    // Not on the DHT right now: the relay is the remaining option.
-    if (sessions_.contains(peerId))
-        return;
-    if (rendezvous_ && rendezvous_->isConnected())
-        rendezvous_->requestConnection(peerId);
-}
-
-void PeerNode::onDhtStatus(const QString &summary)
-{
-    dhtStatus_ = summary;
-    emitStatus();
-}
 
 void PeerNode::stop()
 {
@@ -662,16 +518,6 @@ void PeerNode::stop()
         pending.key()->deleteLater();
     connecting_.clear();
 
-    if (dht_) {
-        dht_->stop();
-        delete dht_;
-        dht_ = 0;
-    }
-    if (rendezvous_) {
-        rendezvous_->stop();
-        delete rendezvous_;
-        rendezvous_ = 0;
-    }
     if (mapper_) {
         mapper_->release();
         delete mapper_;
@@ -995,12 +841,13 @@ void PeerNode::onSessionEstablished(const QString &peerId)
         request.insert("message", pendingRequests_.value(peerId));
         session->sendControl(request);
         pendingRequests_.remove(peerId);
-        requestedAt_.remove(peerId);
     }
 
     if (accepted) {
         sendPicture(session, QString::fromLatin1("avatar"));
         sendPicture(session, QString::fromLatin1("banner"));
+        deliverWaiting(peerId, session);
+        requestHistory(peerId, directConversationId(profile_.identityId, peerId));
     }
 
     emit peerConnected(peerId);
@@ -1062,24 +909,6 @@ void PeerNode::onReconnectTick()
     }
     announce(true);
 
-    // Nothing has been delivered locally after a fair wait: widen the search.
-    if (dhtFallbackAllowed_ && !dht_ && !pendingRequests_.isEmpty()) {
-        const QDateTime now = QDateTime::currentDateTimeUtc();
-        QHash<QString, QDateTime>::const_iterator waiting = requestedAt_.constBegin();
-        for (; waiting != requestedAt_.constEnd(); ++waiting) {
-            if (!pendingRequests_.contains(waiting.key()))
-                continue;
-            if (waiting.value().secsTo(now) < kDhtFallbackSeconds)
-                continue;
-
-            setDhtEnabled(true);
-            if (dht_) {
-                dhtStartedAutomatically_ = true;
-                emit dhtEngagedAutomatically();
-            }
-            break;
-        }
-    }
 }
 
 // ------------------------------------------------------------------ messaging
@@ -1094,7 +923,6 @@ bool PeerNode::requestContact(const QString &peerId, const QString &endpointHint
     }
 
     pendingRequests_.insert(peerId, message);
-    requestedAt_.insert(peerId, QDateTime::currentDateTimeUtc());
     if (!endpointHint.trimmed().isEmpty())
         pendingHints_.insert(peerId, endpointHint.trimmed());
 
@@ -1128,6 +956,71 @@ void PeerNode::acceptContact(const QString &peerId)
     sendProfile(session, true);
     sendPicture(session, QString::fromLatin1("avatar"));
     sendPicture(session, QString::fromLatin1("banner"));
+}
+
+void PeerNode::setMessageStore(MessageStore *store)
+{
+    messages_ = store;
+}
+
+void PeerNode::sendChat(PeerSession *session, const QString &conversationId, const Chat::Message &message)
+{
+    if (!session || !session->isEstablished())
+        return;
+
+    QJsonObject object;
+    object.insert("type", QString::fromLatin1(kMsgChat));
+    object.insert("conversation", conversationId);
+    object.insert("id", message.id);
+    object.insert("text", message.text);
+    object.insert("kind", message.kind);
+    object.insert("sentAtUtc", message.sentAtUtc.toString(Qt::ISODate));
+    object.insert("authorName", profile_.displayName);
+    session->sendControl(object);
+}
+
+void PeerNode::sendMessage(const QString &peerId, const QString &conversationId, const Chat::Message &message)
+{
+    PeerSession *session = sessions_.value(peerId, 0);
+    if (session && session->isEstablished()) {
+        sendChat(session, conversationId, message);
+        if (messages_)
+            messages_->setDelivery(conversationId, message.id, Chat::DeliverySent);
+        return;
+    }
+
+    // Not connected: the message stays in the store as waiting, and reaching
+    // out now means it goes as soon as they answer.
+    reach(peerId);
+}
+
+void PeerNode::deliverWaiting(const QString &peerId, PeerSession *session)
+{
+    if (!messages_ || !session || !session->isEstablished())
+        return;
+
+    const QString conversationId = directConversationId(profile_.identityId, peerId);
+    const QList<Chat::Message> waiting = messages_->waitingFor(conversationId);
+    for (int i = 0; i < waiting.size(); ++i) {
+        sendChat(session, conversationId, waiting.at(i));
+        messages_->setDelivery(conversationId, waiting.at(i).id, Chat::DeliverySent);
+    }
+}
+
+void PeerNode::requestHistory(const QString &peerId, const QString &conversationId)
+{
+    PeerSession *session = sessions_.value(peerId, 0);
+    if (!session || !session->isEstablished() || !messages_)
+        return;
+
+    // Ask only for what we do not have. Whichever side is further ahead sends
+    // the difference, which is what keeps a group in step after somebody has
+    // been away.
+    QJsonObject object;
+    object.insert("type", QString::fromLatin1(kMsgHistoryRequest));
+    object.insert("conversation", conversationId);
+    object.insert("since", messages_->latestTime(conversationId).toString(Qt::ISODate));
+    session->sendControl(object);
 }
 
 void PeerNode::sendProfile(PeerSession *session, bool withPictures)
@@ -1255,6 +1148,73 @@ void PeerNode::onSessionMessage(const QString &peerId, const QJsonObject &object
         if (session && isAccepted(peerId)) {
             sendPicture(session, QString::fromLatin1("avatar"));
             sendPicture(session, QString::fromLatin1("banner"));
+        }
+        return;
+    }
+
+    if (type == QLatin1String(kMsgChat)) {
+        if (!isAccepted(peerId) || !messages_)
+            return;   // strangers do not get to write in our history
+
+        Chat::Message message;
+        message.id = object.value("id").toString();
+        message.conversationId = object.value("conversation").toString();
+        message.authorId = peerId;
+        message.authorName = object.value("authorName").toString();
+        message.text = object.value("text").toString();
+        message.kind = object.value("kind").toInt(Chat::KindText);
+        message.delivery = Chat::DeliveryReceived;
+        message.sentAtUtc = QDateTime::fromString(object.value("sentAtUtc").toString(), Qt::ISODate);
+
+        if (message.text.size() > 8000 || message.id.isEmpty() || message.conversationId.isEmpty())
+            return;
+        if (!message.sentAtUtc.isValid())
+            message.sentAtUtc = QDateTime::currentDateTimeUtc();
+
+        const bool known = messages_->contains(message.conversationId, message.id);
+        const Chat::Message stored = messages_->append(message);
+        if (!stored.isValid())
+            return;
+
+        if (session) {
+            QJsonObject ack;
+            ack.insert("type", QString::fromLatin1(kMsgChatAck));
+            ack.insert("conversation", message.conversationId);
+            ack.insert("id", message.id);
+            session->sendControl(ack);
+        }
+
+        if (!known)
+            emit messageReceived(peerId, message.conversationId, stored);
+        return;
+    }
+
+    if (type == QLatin1String(kMsgChatAck)) {
+        if (!messages_)
+            return;
+        const QString conversationId = object.value("conversation").toString();
+        const QString messageId = object.value("id").toString();
+        messages_->setDelivery(conversationId, messageId, Chat::DeliveryAcknowledged);
+        emit messageDelivered(conversationId, messageId);
+        return;
+    }
+
+    if (type == QLatin1String(kMsgHistoryRequest)) {
+        if (!isAccepted(peerId) || !messages_ || !session)
+            return;
+
+        const QString conversationId = object.value("conversation").toString();
+        const QDateTime since = QDateTime::fromString(object.value("since").toString(), Qt::ISODate);
+        const QList<Chat::Message> newer = messages_->since(conversationId, since);
+        for (int i = 0; i < newer.size(); ++i)
+            sendChat(session, conversationId, newer.at(i));
+        return;
+    }
+
+    if (type == QLatin1String(kMsgTyping)) {
+        if (isAccepted(peerId)) {
+            emit typingChanged(peerId, object.value("conversation").toString(),
+                               object.value("typing").toBool(false));
         }
         return;
     }

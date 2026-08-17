@@ -10,6 +10,7 @@
 #include "avatar.h"
 #include "identity_store.h"
 #include "meeru_paths.h"
+#include "message_store.h"
 #include "peer_node.h"
 #include "roster.h"
 
@@ -23,10 +24,14 @@ class QPushButton;
 class QStackedWidget;
 class QTimer;
 class QEvent;
+class QMoveEvent;
+class QResizeEvent;
+class QCloseEvent;
 
 class AvatarFrame;
 class BannerFrame;
 class ContactCard;
+class DmWindow;
 class ClickableLabel;
 class MeeruTitleBar;
 
@@ -45,6 +50,9 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event);
+    void moveEvent(QMoveEvent *event);
+    void resizeEvent(QResizeEvent *event);
+    void closeEvent(QCloseEvent *event);
 
 private slots:
     void onAvatarClicked();
@@ -68,9 +76,11 @@ private slots:
     void onPeerProfile(const QString &peerId, const QString &displayName,
                        const QString &presence, const QString &statusText);
     void onPeerPicture(const QString &peerId, const QString &kind);
-    void onDhtEngaged();
     void onHoverItem(QListWidgetItem *item);
     void onHoverTimeout();
+    void onChatMessage(const QString &peerId, const QString &conversationId, const Chat::Message &message);
+    void onMessageDelivered(const QString &conversationId, const QString &messageId);
+    void onDmClosed(const QString &peerId);
 
 private:
     void buildUi();
@@ -90,6 +100,7 @@ private:
     void publishPictures();
     QPixmap contactTile(const Roster::Contact &contact) const;
     void hideContactCard();
+    DmWindow *openDirectMessage(const QString &peerId);
     void applyPresence(int state, bool animate);
 
     void addMessagesEntry();
@@ -138,7 +149,9 @@ private:
     QLabel *newsLabel_;
     QLabel *footerLabel_;
 
+    MessageStore *messages_;
     PeerNode *node_;
+    QHash<QString, DmWindow *> chats_;
     QString networkStatus_;
     ContactCard *card_;
     QTimer *hoverTimer_;

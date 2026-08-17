@@ -9,6 +9,7 @@
 #include <QWidget>
 
 class QVBoxLayout;
+class QHBoxLayout;
 
 // Minimise / maximise / close, drawn with the painter instead of glyphs so
 // they land on exact pixels at any DPI and do not depend on a font having the
@@ -22,7 +23,9 @@ public:
         Minimise,
         Maximise,
         Restore,
-        Close
+        Close,
+        Pinned,      // docked to the main window
+        Unpinned     // free floating
     };
 
     TitleBarButton(Kind kind, QWidget *parent = 0);
@@ -44,8 +47,17 @@ class MeeruTitleBar : public QWidget
     Q_OBJECT
 
 public:
-    explicit MeeruTitleBar(const QString &title, bool withMinimise, bool withMaximise, QWidget *parent = 0);
+    explicit MeeruTitleBar(const QString &title, bool withMinimise, bool withMaximise,
+                           QWidget *parent = 0);
     void setTitle(const QString &title);
+
+    // Adds the pin, left of the other buttons. Pressing it is what detaches a
+    // window from the main one, and pressing it again brings it back.
+    void addPinButton(bool pinned);
+    void setPinned(bool pinned);
+
+signals:
+    void pinToggled(bool pinned);
 
 protected:
     void mousePressEvent(QMouseEvent *event);
@@ -54,6 +66,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent *event);
 
 private slots:
+    void onPin();
     void onMinimise();
     void onMaximise();
     void onClose();
@@ -63,6 +76,9 @@ private:
 
     QLabel *titleLabel_;
     TitleBarButton *maximiseButton_;
+    TitleBarButton *pinButton_;
+    QHBoxLayout *layout_;
+    bool pinned_;
     QPoint dragOffset_;
     bool dragging_;
     bool canMaximise_;

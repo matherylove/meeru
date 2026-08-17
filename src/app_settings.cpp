@@ -7,7 +7,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
@@ -47,7 +46,7 @@ bool writeObject(const QString &path, const QJsonObject &object, QString *error)
 AppSettings::AppSettings()
     : formatVersion(1), presence(QString::fromLatin1("available")), startWithWindows(true),
       inviteLifetimeSeconds(Invite::defaultLifetime()),
-      useUpnp(true), useDht(true), dhtFallback(true), dhtNoticeShown(false), firewallProfiles(FirewallHelper::defaultProfiles()), listenPort(0)
+      useUpnp(true), firewallProfiles(FirewallHelper::defaultProfiles()), listenPort(0)
 {
 }
 
@@ -74,12 +73,6 @@ AppSettings SettingsStore::load() const
     if (object.contains("presence"))
         settings.presence = object.value("presence").toString();
     settings.statusText = object.value("statusText").toString();
-    const QJsonArray hosts = object.value("rendezvousHosts").toArray();
-    for (int i = 0; i < hosts.size(); ++i) {
-        const QString host = hosts.at(i).toString().trimmed();
-        if (!host.isEmpty())
-            settings.rendezvousHosts.append(host);
-    }
     settings.startWithWindows = object.value("startWithWindows").toBool(true);
     if (object.contains("inviteLifetimeSeconds")) {
         settings.inviteLifetimeSeconds =
@@ -88,9 +81,6 @@ AppSettings SettingsStore::load() const
             settings.inviteLifetimeSeconds = 0;
     }
     settings.useUpnp = object.value("useUpnp").toBool(true);
-    settings.useDht = object.value("useDht").toBool(true);
-    settings.dhtFallback = object.value("dhtFallback").toBool(true);
-    settings.dhtNoticeShown = object.value("dhtNoticeShown").toBool(false);
     if (object.contains("firewallProfiles"))
         settings.firewallProfiles = object.value("firewallProfiles").toString();
     settings.listenPort = object.value("listenPort").toInt(0);
@@ -108,16 +98,9 @@ bool SettingsStore::save(const AppSettings &settings, QString *error) const
     object.insert("displayName", settings.displayName);
     object.insert("presence", settings.presence);
     object.insert("statusText", settings.statusText);
-    QJsonArray hosts;
-    for (int i = 0; i < settings.rendezvousHosts.size(); ++i)
-        hosts.append(settings.rendezvousHosts.at(i));
-    object.insert("rendezvousHosts", hosts);
     object.insert("startWithWindows", settings.startWithWindows);
     object.insert("inviteLifetimeSeconds", static_cast<double>(settings.inviteLifetimeSeconds));
     object.insert("useUpnp", settings.useUpnp);
-    object.insert("useDht", settings.useDht);
-    object.insert("dhtFallback", settings.dhtFallback);
-    object.insert("dhtNoticeShown", settings.dhtNoticeShown);
     object.insert("firewallProfiles", settings.firewallProfiles);
     object.insert("listenPort", settings.listenPort);
     object.insert("publicAddress", settings.publicAddress);

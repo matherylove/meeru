@@ -64,6 +64,13 @@ inline QString sheet()
         "QAbstractScrollArea { background: #30223B; border: 0; }"
 
         "#emptyState { color: #C9B9CF; font-size: 11px; background: #30223B; }"
+        "#dmHistory { background: #241B2E; border: 0; padding: 4px 10px; }"
+        "#dmTyping { color: #ae9bb6; font-size: 10px; font-style: italic; background: #241B2E; }"
+        "#dmComposeWrap { background: #1a1322; border-top: 1px solid #634A70; }"
+        "#dmCompose { background: #19121f; border: 1px solid #634A70; border-radius: 6px;"
+        "             color: #FFF7FC; font-size: 12px; padding: 0 8px; }"
+        "#dmCompose:focus { border-color: #DFB2F4; }"
+
         "#news { background: #2a1e33; border-top: 1px solid #634A70; color: #C9B9CF; font-size: 11px; }"
         "#newsTitle { color: #FFF7FC; font-weight: bold; font-size: 11px; background: transparent; }"
         "#footer { background: #1d1524; border-top: 1px solid #634A70; }"

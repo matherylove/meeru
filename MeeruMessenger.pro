@@ -19,21 +19,15 @@ SOURCES += \
     src/meeru_dialogs.cpp \
     src/crop_dialog.cpp \
     src/avatar.cpp \
+    src/message_store.cpp \
+    src/dm_window.cpp \
     src/roster.cpp \
     src/identity_backup.cpp \
     src/peer_session.cpp \
     src/peer_node.cpp \
     src/contact_card.cpp \
     src/firewall_helper.cpp \
-    src/sha1.cpp \
-    src/crc32c.cpp \
-    src/bencode.cpp \
-    src/sha512.cpp \
-    src/std_ed25519.cpp \
-    src/dht_node.cpp \
-    src/dht_directory.cpp \
     src/invite_code.cpp \
-    src/rendezvous.cpp \
     src/port_mapper.cpp \
     src/meeru_paths.cpp \
     src/identity_crypto.cpp \
@@ -51,21 +45,15 @@ HEADERS += \
     src/meeru_dialogs.h \
     src/crop_dialog.h \
     src/avatar.h \
+    src/message_store.h \
+    src/dm_window.h \
     src/roster.h \
     src/identity_backup.h \
     src/peer_session.h \
     src/peer_node.h \
     src/contact_card.h \
     src/firewall_helper.h \
-    src/sha1.h \
-    src/crc32c.h \
-    src/bencode.h \
-    src/sha512.h \
-    src/std_ed25519.h \
-    src/dht_node.h \
-    src/dht_directory.h \
     src/invite_code.h \
-    src/rendezvous.h \
     src/port_mapper.h \
     src/meeru_paths.h \
     src/identity_crypto.h \

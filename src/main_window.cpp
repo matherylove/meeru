@@ -7,6 +7,8 @@
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QCursor>
+#include <QCloseEvent>
+#include <QMoveEvent>
 #include <QEvent>
 #include <QHash>
 #include <QIcon>
@@ -28,6 +30,7 @@
 #include <QTimer>
 
 #include "contact_card.h"
+#include "dm_window.h"
 #include "firewall_helper.h"
 #include "meeru_dialogs.h"
 #include "meeru_paint.h"
@@ -265,8 +268,10 @@ MainWindow::MainWindow(const LocalProfile &profile, const MeeruPaths &paths, QWi
       titleBar_(0), banner_(0), avatar_(0), nameLabel_(0), presenceDot_(0), stateLabel_(0), statusLabel_(0),
       statusEdit_(0), statusStack_(0), search_(0), tabs_(0), addButton_(0),
       list_(0), emptyLabel_(0), listStack_(0), newsLabel_(0), footerLabel_(0),
-      node_(0), card_(0), hoverTimer_(0)
+      messages_(0), node_(0), card_(0), hoverTimer_(0)
 {
+    messages_ = new MessageStore(paths_, profile.identityId, this);
+
     const AppSettings saved = settings_.load();
     presence_ = Presence::stateFromKey(saved.presence.isEmpty() ? profile_.presence : saved.presence);
     statusText_ = saved.statusText;
@@ -1096,13 +1101,125 @@ void MainWindow::openContact(const QString &contactId)
     if (tabs_->button(MessagesTab))
         tabs_->button(MessagesTab)->setChecked(true);
     refreshList();
-    notYetAvailable(QString::fromLatin1("Conversations"));
+    openDirectMessage(contactId);
 }
 
 void MainWindow::openConversation(const QString &conversationId)
 {
+    const QList<Roster::Conversation> all = roster_.conversations();
+    for (int i = 0; i < all.size(); ++i) {
+        if (all.at(i).id != conversationId)
+            continue;
+        if (!all.at(i).group && all.at(i).members.size() == 1) {
+            openDirectMessage(all.at(i).members.first());
+            return;
+        }
+        break;
+    }
+
+    // Group conversations get their own window in the next part of this work.
+    notYetAvailable(QString::fromLatin1("Group conversations"));
+}
+
+DmWindow *MainWindow::openDirectMessage(const QString &peerId)
+{
+    if (peerId.isEmpty())
+        return 0;
+
+    if (chats_.contains(peerId)) {
+        DmWindow *existing = chats_.value(peerId);
+        existing->setContact(roster_.contact(peerId));
+        existing->show();
+        existing->raise();
+        existing->activateWindow();
+        return existing;
+    }
+
+    DmWindow *window = new DmWindow(profile_, roster_.contact(peerId), paths_, messages_, node_, this);
+    window->setAttribute(Qt::WA_DeleteOnClose, false);
+    window->setWindowIcon(windowIcon());
+    window->setPeerOnline(node_ && node_->isOnline(peerId));
+    connect(window, SIGNAL(closed(QString)), this, SLOT(onDmClosed(QString)));
+    chats_.insert(peerId, window);
+
+    window->show();
+    window->followAnchor();
+    return window;
+}
+
+void MainWindow::onDmClosed(const QString &peerId)
+{
+    DmWindow *window = chats_.take(peerId);
+    if (window)
+        window->deleteLater();
+}
+
+void MainWindow::onChatMessage(const QString &peerId, const QString &conversationId,
+                               const Chat::Message &message)
+{
+    // A message from somebody with no window open still has to be visible:
+    // the conversation is created so it shows up in the Messages list.
+    QStringList members;
+    members.append(peerId);
+    Roster::Conversation existing = roster_.conversationWithMembers(members);
+    if (existing.id.isEmpty()) {
+        Roster::Conversation conversation;
+        conversation.id = Roster::newLocalId();
+        conversation.members = members;
+        conversation.group = false;
+        conversation.createdAtUtc = QDateTime::currentDateTimeUtc();
+        conversation.updatedAtUtc = conversation.createdAtUtc;
+        roster_.addConversation(conversation, 0);
+    }
+
+    if (chats_.contains(peerId))
+        chats_.value(peerId)->appendMessage(message);
+
     Q_UNUSED(conversationId);
-    notYetAvailable(QString::fromLatin1("Conversations"));
+    refreshList();
+    refreshNews();
+}
+
+void MainWindow::onMessageDelivered(const QString &conversationId, const QString &messageId)
+{
+    Q_UNUSED(messageId);
+    QHash<QString, DmWindow *>::const_iterator it = chats_.constBegin();
+    for (; it != chats_.constEnd(); ++it) {
+        if (it.value()->conversationId() == conversationId)
+            it.value()->refreshDelivery();
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // Conversation windows are top level so they can be dragged away from the
+    // main one; that means closing this window has to take them with it, or
+    // Meeru would linger with no way back to it.
+    const QList<DmWindow *> windows = chats_.values();
+    chats_.clear();
+    for (int i = 0; i < windows.size(); ++i) {
+        windows.at(i)->disconnect(this);
+        windows.at(i)->close();
+        windows.at(i)->deleteLater();
+    }
+
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::moveEvent(QMoveEvent *event)
+{
+    QMainWindow::moveEvent(event);
+    QHash<QString, DmWindow *>::const_iterator it = chats_.constBegin();
+    for (; it != chats_.constEnd(); ++it)
+        it.value()->followAnchor();
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    QHash<QString, DmWindow *>::const_iterator it = chats_.constBegin();
+    for (; it != chats_.constEnd(); ++it)
+        it.value()->followAnchor();
 }
 
 void MainWindow::openServer(const QString &serverId)
@@ -1255,10 +1372,10 @@ void MainWindow::onSettings()
 {
     const AppSettings current = settings_.load();
     SettingsDialog dialog(profile_.displayName, profile_.identityId, paths_.root(),
-                          current.startWithWindows, current.rendezvousHosts,
+                          current.startWithWindows,
                           node_ ? node_->reachability() : QString(),
                           node_ ? node_->diagnostics() : QString(),
-                          current.useUpnp, current.useDht, current.dhtFallback, current.firewallProfiles, current.listenPort,
+                          current.useUpnp, current.firewallProfiles, current.listenPort,
                           current.publicAddress, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
@@ -1282,20 +1399,14 @@ void MainWindow::onSettings()
     values.presence = Presence::key(presence_);
     values.statusText = statusText_;
     values.startWithWindows = dialog.startWithWindows();
-    values.rendezvousHosts = dialog.rendezvousHosts();
     values.useUpnp = dialog.useUpnp();
-    values.useDht = dialog.useDht();
-    values.dhtFallback = dialog.dhtFallback();
     values.firewallProfiles = dialog.firewallProfiles();
     values.listenPort = dialog.listenPort();
     values.publicAddress = dialog.publicAddress();
     settings_.save(values, 0);
 
     if (node_) {
-        node_->setRendezvousHosts(values.rendezvousHosts);
         node_->setNetworkPreferences(values.listenPort, values.publicAddress, values.useUpnp);
-        node_->setDhtEnabled(values.useDht);
-        node_->setDhtFallbackAllowed(values.dhtFallback);
     }
 
     if (dialog.firewallRequested() && node_ && node_->isRunning()) {
@@ -1346,13 +1457,14 @@ void MainWindow::startNetwork()
     connect(node_, SIGNAL(profileReceived(QString,QString,QString,QString)),
             this, SLOT(onPeerProfile(QString,QString,QString,QString)));
     connect(node_, SIGNAL(pictureReceived(QString,QString)), this, SLOT(onPeerPicture(QString,QString)));
-    connect(node_, SIGNAL(dhtEngagedAutomatically()), this, SLOT(onDhtEngaged()));
+    connect(node_, SIGNAL(messageReceived(QString,QString,Chat::Message)),
+            this, SLOT(onChatMessage(QString,QString,Chat::Message)));
+    connect(node_, SIGNAL(messageDelivered(QString,QString)),
+            this, SLOT(onMessageDelivered(QString,QString)));
+    node_->setMessageStore(messages_);
 
     const AppSettings network = settings_.load();
     node_->setNetworkPreferences(network.listenPort, network.publicAddress, network.useUpnp);
-    node_->setDhtEnabled(network.useDht);
-    node_->setDhtFallbackAllowed(network.dhtFallback);
-    node_->setRendezvousHosts(network.rendezvousHosts);
 
     // The private key has to be unsealed to prove this identity to peers.
     IdentityStore store(paths_);
@@ -1383,25 +1495,6 @@ void MainWindow::startNetwork()
     node_->setContacts(roster_.contacts());
     publishProfile();
     publishPictures();
-
-    // Being findable worldwide is on by default because it is what makes a
-    // pasted ID work at all across the internet. Turning it on quietly would
-    // still be wrong: it is said out loud, once.
-    if (network.useDht && !network.dhtNoticeShown) {
-        AppSettings values = settings_.load();
-        values.dhtNoticeShown = true;
-        settings_.save(values, 0);
-
-        MeeruDialog::showMessage(
-            this, QString::fromLatin1("Being findable"),
-            QString::fromLatin1("So that somebody can reach you with nothing but your Meeru ID, Meeru "
-                                "publishes where you are in the public network BitTorrent uses to find "
-                                "peers. The entry is signed with your key, so nobody can forge or alter "
-                                "it.\n\nWhat it costs: your public key sits next to your current IP "
-                                "address on machines run by strangers, so anyone who has your ID can see "
-                                "when you are online and roughly where. Settings has a switch to turn "
-                                "this off and stay on your own network only."));
-    }
 
     checkFirewall();
 }
@@ -1443,16 +1536,6 @@ void MainWindow::checkFirewall()
     }
 }
 
-void MainWindow::onDhtEngaged()
-{
-    MeeruDialog::showMessage(
-        this, QString::fromLatin1("Looking further afield"),
-        QString::fromLatin1("Your contact could not be reached on this network, so Meeru has started "
-                            "looking for them through the public distributed network instead.\n\n"
-                            "That means your key and your current address are now published there, where "
-                            "anyone holding your Meeru ID can see when you are online. You can switch this "
-                            "off in Settings if you would rather stay on your own network only."));
-}
 
 void MainWindow::publishProfile()
 {
@@ -1476,6 +1559,8 @@ void MainWindow::onNetworkStatus(const QString &summary)
 
 void MainWindow::onPeerConnected(const QString &peerId)
 {
+    if (chats_.contains(peerId))
+        chats_.value(peerId)->setPeerOnline(true);
     roster_.touchContact(peerId, 0);
     refreshList();
     refreshNews();
@@ -1483,7 +1568,8 @@ void MainWindow::onPeerConnected(const QString &peerId)
 
 void MainWindow::onPeerDisconnected(const QString &peerId)
 {
-    Q_UNUSED(peerId);
+    if (chats_.contains(peerId))
+        chats_.value(peerId)->setPeerOnline(false);
     refreshList();
     refreshNews();
 }

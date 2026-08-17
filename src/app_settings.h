@@ -3,7 +3,6 @@
 
 #include <QDateTime>
 #include <QString>
-#include <QStringList>
 
 #include "meeru_paths.h"
 
@@ -17,14 +16,10 @@ struct AppSettings
     QString presence;
     QString statusText;
     bool startWithWindows;
-    QStringList rendezvousHosts;
     qint64 inviteLifetimeSeconds;   // 0 = never expires
 
     // Advanced networking, for when the router will not cooperate on its own.
     bool useUpnp;
-    bool useDht;
-    bool dhtFallback;
-    bool dhtNoticeShown;
     QString firewallProfiles;   // "private,domain,public"
     int listenPort;                 // 0 = pick one automatically
     QString publicAddress;          // what the outside world can reach, when forwarded by hand

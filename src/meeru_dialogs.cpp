@@ -358,9 +358,12 @@ AddContactDialog::AddContactDialog(const LocalProfile &profile,
     connect(nearbyList_, SIGNAL(itemSelectionChanged()), this, SLOT(onNearbyChosen()));
 
     contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
-        "Paste what your friend sent you. An invite code carries their addresses as well as their "
-        "identity, so it reaches them anywhere; a bare Meeru ID only works on your own network or "
-        "with an address you fill in below."), this));
+        "Anyone running Meeru on this network is listed above: pick them and the request is on its "
+        "way. Otherwise paste what your friend sent you, either their Meeru ID or an invite code, "
+        "which also carries the addresses they answer on.\n\n"
+        "Meeru only reaches people on the same network as this computer. For a friend somewhere "
+        "else, put both machines on one virtual network first with Hamachi, Radmin VPN or ZeroTier; "
+        "Meeru then finds them there exactly as it would in the same room."), this));
 
     contentLayout()->addWidget(fieldLabel(QString::fromLatin1("INVITE CODE OR MEERU ID"), this));
     idEdit_ = makeEdit(QString::fromLatin1("meeru-invite:... or the plain 64 character ID"), this);
@@ -370,7 +373,7 @@ AddContactDialog::AddContactDialog(const LocalProfile &profile,
     nameEdit_ = makeEdit(QString::fromLatin1("How you want to see them"), this);
     contentLayout()->addWidget(nameEdit_);
 
-    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("ADDRESS (ONLY FOR A BARE ID FROM OUTSIDE YOUR NETWORK)"), this));
+    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("ADDRESS (ONLY IF THEY ARE NOT FOUND AUTOMATICALLY)"), this));
     addressEdit_ = makeEdit(QString::fromLatin1("192.168.1.20:47441 or host.example:47441"), this);
     contentLayout()->addWidget(addressEdit_);
 
@@ -497,10 +500,9 @@ void AddContactDialog::onCopyOwnCode()
 
     if (!hasPublicAddress) {
         message += QString::fromLatin1(
-            "Be aware: this code only contains addresses on your own network. Somebody on the same "
-            "network can use it, but somebody in another country cannot reach any of them. For that "
-            "you need the router to open a port (UPnP in Settings), a port forwarded by hand, or the "
-            "worldwide lookup switched on for both of you.\n\n");
+            "This code contains the addresses this computer answers on, all of them on your own "
+            "network. Whoever uses it has to be on that same network, whether it is the one in your "
+            "house or a virtual one you both joined.\n\n");
     }
     if (inviteLifetime() <= 0) {
         message += QString::fromLatin1("It never expires, so it will keep working until this device "
@@ -581,8 +583,8 @@ void AddContactDialog::validate()
 
     pastedId_ = normalised;
     feedback_->setText(QString::fromLatin1(
-        "Valid ID. Meeru will find them on your own network; from further away it needs the address "
-        "below, or an invite code instead."));
+        "Valid ID. Meeru will find them if they are on this network. If they are not, join the same "
+        "virtual network first, or fill in the address below."));
     acceptButton_->setEnabled(true);
 }
 
@@ -869,12 +871,9 @@ SettingsDialog::SettingsDialog(const QString &displayName,
                                const QString &identityId,
                                const QString &folder,
                                bool startWithWindows,
-                               const QStringList &rendezvousHosts,
                                const QString &reachability,
                                const QString &diagnostics,
                                bool useUpnp,
-                               bool useDht,
-                               bool dhtFallback,
                                const QString &firewallProfiles,
                                int listenPort,
                                const QString &publicAddress,
@@ -882,7 +881,7 @@ SettingsDialog::SettingsDialog(const QString &displayName,
     : MeeruDialog(QString::fromLatin1("Settings"), parent),
       identityId_(identityId), folder_(folder), diagnostics_(diagnostics),
       nameEdit_(0), startupBox_(0),
-      rendezvousEdit_(0), upnpBox_(0), dhtBox_(0), dhtFallbackBox_(0),
+      upnpBox_(0),
       firewallPrivateBox_(0), firewallDomainBox_(0), firewallPublicBox_(0),
       firewallRequested_(false), portEdit_(0), publicEdit_(0)
 {
@@ -915,23 +914,6 @@ SettingsDialog::SettingsDialog(const QString &displayName,
     upnpBox_->setChecked(useUpnp);
     contentLayout()->addWidget(upnpBox_);
 
-    dhtBox_ = new QCheckBox(QString::fromLatin1("Let contacts find me anywhere, with only my Meeru ID"), this);
-    dhtBox_->setChecked(useDht);
-    contentLayout()->addWidget(dhtBox_);
-    dhtFallbackBox_ = new QCheckBox(QString::fromLatin1(
-        "Only when someone cannot be reached on my own network"), this);
-    dhtFallbackBox_->setChecked(dhtFallback);
-    contentLayout()->addWidget(dhtFallbackBox_);
-
-    contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
-        "This publishes where you are in the same public network BitTorrent uses to find peers, signed "
-        "with your own key so nobody can forge or change it. It is what lets somebody in another country "
-        "reach you by pasting your ID, with no server involved.\n\n"
-        "It is off by default because of what it costs: your public key sits next to your current IP "
-        "address on machines run by strangers, so anyone who knows your ID can tell when you are online "
-        "and roughly where you are. Leave it off if you would rather be reachable only on your own "
-        "network, by invite code, or through a rendezvous node."), this));
-
     QHBoxLayout *portRow = new QHBoxLayout();
     portRow->setSpacing(8);
 
@@ -949,8 +931,8 @@ SettingsDialog::SettingsDialog(const QString &displayName,
     QVBoxLayout *publicColumnLayout = new QVBoxLayout(publicColumn);
     publicColumnLayout->setContentsMargins(0, 0, 0, 0);
     publicColumnLayout->setSpacing(4);
-    publicColumnLayout->addWidget(fieldLabel(QString::fromLatin1("YOUR PUBLIC ADDRESS"), publicColumn));
-    publicEdit_ = makeEdit(QString::fromLatin1("203.0.113.9:47441"), publicColumn);
+    publicColumnLayout->addWidget(fieldLabel(QString::fromLatin1("ADDRESS TO HAND OUT"), publicColumn));
+    publicEdit_ = makeEdit(QString::fromLatin1("Usually left empty"), publicColumn);
     publicEdit_->setText(publicAddress);
     publicColumnLayout->addWidget(publicEdit_);
 
@@ -959,10 +941,13 @@ SettingsDialog::SettingsDialog(const QString &displayName,
     contentLayout()->addLayout(portRow);
 
     contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
-        "If your router does not answer UPnP, forward a port to this computer yourself, put the same "
-        "number on the left, and on the right the address people outside would use. Meeru then puts "
-        "that address into your invite codes and contacts connect straight to you.\n\n"
-        "A port change takes effect the next time Meeru starts."), this));
+        "Meeru talks to people on the same network as this computer, and nothing else: it runs no "
+        "server and cannot be reached from the open internet. To play with a friend somewhere else, "
+        "put both machines on one virtual network with Hamachi, Radmin VPN or ZeroTier, and Meeru "
+        "will find them there exactly as it would in the same room.\n\n"
+        "The two fields above are only for unusual setups: a fixed port instead of whichever one is "
+        "free, and an address to advertise when you have arranged one yourself. A port change takes "
+        "effect the next time Meeru starts."), this));
 
     // --- firewall
     contentLayout()->addWidget(fieldLabel(QString::fromLatin1("WINDOWS FIREWALL"), this));
@@ -989,16 +974,6 @@ SettingsDialog::SettingsDialog(const QString &displayName,
         "not consider it trusted, such as a cafe or an airport; allowing that is convenient but means "
         "strangers on the same network can open a connection to Meeru. The rules apply to Meeru alone "
         "and are checked every time it starts."), this));
-
-    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("RENDEZVOUS NODES"), this));
-    rendezvousEdit_ = makeEdit(QString::fromLatin1("meeru.example.org:47450, 203.0.113.9"), this);
-    rendezvousEdit_->setText(rendezvousHosts.join(QString::fromLatin1(", ")));
-    contentLayout()->addWidget(rendezvousEdit_);
-    contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
-        "A last resort for when neither side can be reached directly, which happens when both "
-        "connections sit behind a provider's own NAT. A node introduces the two of you and carries "
-        "the sealed traffic; it cannot read anything passing through.\n\n"
-        "Host your own with MeeruServer on any machine with a public address, and put it here."), this));
 
     contentLayout()->addWidget(fieldLabel(QString::fromLatin1("YOUR MEERU ID"), this));
     QHBoxLayout *idRow = new QHBoxLayout();
@@ -1065,10 +1040,6 @@ QString SettingsDialog::publicAddress() const
     return publicEdit_->text().trimmed();
 }
 
-bool SettingsDialog::useDht() const
-{
-    return dhtBox_->isChecked();
-}
 
 QString SettingsDialog::firewallProfiles() const
 {
@@ -1093,23 +1064,7 @@ void SettingsDialog::onAddFirewallRules()
     accept();
 }
 
-bool SettingsDialog::dhtFallback() const
-{
-    return dhtFallbackBox_->isChecked();
-}
 
-QStringList SettingsDialog::rendezvousHosts() const
-{
-    QStringList hosts;
-    const QStringList parts = rendezvousEdit_->text().split(QRegExp(QString::fromLatin1("[,;\\s]+")),
-                                                            QString::SkipEmptyParts);
-    for (int i = 0; i < parts.size(); ++i) {
-        const QString host = parts.at(i).trimmed();
-        if (!host.isEmpty())
-            hosts.append(host);
-    }
-    return hosts;
-}
 
 void SettingsDialog::onShowDiagnostics()
 {

@@ -11,12 +11,11 @@
 #include "identity_crypto.h"
 #include "identity_store.h"
 #include "meeru_paths.h"
+#include "message_store.h"
 #include "roster.h"
 
 class PeerSession;
-class DhtDirectory;
 class PortMapper;
-class RendezvousClient;
 class QTcpServer;
 class QTcpSocket;
 class QTimer;
@@ -46,13 +45,20 @@ struct NearbyPeer
 
 // The peer to peer engine.
 //
-// Reachability is deliberately smaller than Jami's: Jami finds peers through
-// OpenDHT and punches through NAT with ICE, which is a project of its own.
-// Meeru currently finds peers by announcing itself on the local network, and
-// otherwise connects to an address the user was given. Everything above that
-// layer follows Jami: an identity is a key pair, adding somebody sends a trust
-// request that stays pending until they accept, and profiles travel over the
-// encrypted link between the two devices rather than through a server.
+// Meeru connects people directly, and only directly. Contacts on the same
+// network are found by announcing on it; contacts elsewhere are reached at an
+// address their invite code carries, which the router can open on its own
+// through UPnP or which the user forwards by hand.
+//
+// There is no directory service and no relay of any kind, which is a real
+// limitation and worth naming: two people who are both behind a router that
+// will not open a port cannot reach each other at all. What is here works
+// without asking anyone for permission or trusting any third party with who
+// talks to whom.
+//
+// Above that layer the model follows Jami: an identity is a key pair, adding
+// somebody sends a trust request that stays pending until they accept, and
+// profiles travel over the encrypted link between the two devices.
 class PeerNode : public QObject
 {
     Q_OBJECT
@@ -63,24 +69,11 @@ public:
 
     bool start(const LocalProfile &profile, const IdentityMaterial &material, QString *error = 0);
 
-    // Rendezvous nodes let contacts outside this network find each other. With
-    // none configured Meeru still works, but only on the local network or with
-    // an address typed by hand.
-    void setRendezvousHosts(const QStringList &hosts);
-
     // Set before start(). A fixed port plus an address forwarded by hand is the
     // way through for people whose router does not answer UPnP.
     void setNetworkPreferences(int listenPort, const QString &publicAddress, bool useUpnp);
 
-    // The DHT lets contacts anywhere find this device with nothing but a
-    // Meeru ID. It is off unless the user turns it on, because publishing
-    // there means putting your key beside your IP on strangers' machines.
-    void setDhtEnabled(bool enabled);
-
-    // When the local network does not deliver a request within a short while,
-    // Meeru falls back to the public DHT on its own. Publishing there is not
-    // free of consequences, so the user is told the first time it happens.
-    void setDhtFallbackAllowed(bool allowed);
+    // How this device can currently be reached, in words fit for the screen.
     QString reachability() const;
 
     // A plain account of what the engine is actually doing, so a connection
@@ -100,6 +93,13 @@ public:
     // Sends a trust request, connecting first if needed.
     bool requestContact(const QString &peerId, const QString &endpointHint, const QString &message, QString *error = 0);
     void acceptContact(const QString &peerId);
+
+    // Conversations. A message to somebody who is not connected is kept by the
+    // store and handed over the moment they appear, so writing to an offline
+    // contact behaves the way people expect from a phone.
+    void setMessageStore(MessageStore *store);
+    void sendMessage(const QString &peerId, const QString &conversationId, const Chat::Message &message);
+    void requestHistory(const QString &peerId, const QString &conversationId);
     void forgetPeer(const QString &peerId);
 
     bool isOnline(const QString &peerId) const;
@@ -117,12 +117,11 @@ public:
     // firewall helper so the rule and the socket cannot drift apart.
     static quint16 discoveryUdpPort();
 
+    // Both sides derive the same conversation name from the two Meeru IDs.
+    static QString directConversationId(const QString &a, const QString &b);
+
 signals:
     void statusChanged(const QString &summary);
-
-    // Raised once, when Meeru turns to the public network because the local
-    // one did not work. The user deserves to know that happened.
-    void dhtEngagedAutomatically();
     void peerConnected(const QString &peerId);
     void peerDisconnected(const QString &peerId);
     void trustRequestReceived(const QString &peerId, const QString &displayName, const QString &message);
@@ -130,6 +129,9 @@ signals:
     void profileReceived(const QString &peerId, const QString &displayName,
                          const QString &presence, const QString &statusText);
     void pictureReceived(const QString &peerId, const QString &kind);
+    void messageReceived(const QString &peerId, const QString &conversationId, const Chat::Message &message);
+    void messageDelivered(const QString &conversationId, const QString &messageId);
+    void typingChanged(const QString &peerId, const QString &conversationId, bool typing);
 
 private slots:
     void onIncomingConnection();
@@ -144,13 +146,6 @@ private slots:
     void onConnectTimeout();
     void onPortMapped(const QString &externalAddress);
     void onPortMappingFailed(const QString &reason);
-    void onRelayedSocket(const QString &peerId, QTcpSocket *socket, bool initiator);
-    void onDirectCandidates(const QString &peerId, const QStringList &endpoints);
-    void onRendezvousStatus(const QString &summary);
-    void onPeerUnreachable(const QString &peerId, const QString &reason);
-    void onPeerLocated(const QString &peerId, const QStringList &endpoints);
-    void onPeerNotFound(const QString &peerId);
-    void onDhtStatus(const QString &summary);
 
 private:
     void announce(bool query);
@@ -160,14 +155,16 @@ private:
     int contactState(const QString &peerId) const;
     bool isAccepted(const QString &peerId) const;
     void sendProfile(PeerSession *session, bool withPictures);
+    void deliverWaiting(const QString &peerId, PeerSession *session);
+    void sendChat(PeerSession *session, const QString &conversationId, const Chat::Message &message);
     void sendPicture(PeerSession *session, const QString &kind);
     void storePicture(const QString &peerId, const QString &kind, const QJsonObject &header, const QByteArray &blob);
     void connectTo(const QString &peerId, const PeerEndpoint &endpoint);
     void reach(const QString &peerId);
-    void publishEndpoints();
     void emitStatus();
 
     MeeruPaths paths_;
+    MessageStore *messages_;
     LocalProfile profile_;
     IdentityMaterial material_;
     QString statusText_;
@@ -188,18 +185,9 @@ private:
     QHash<QString, int> contactStates_;
     QHash<QTcpSocket *, QString> connecting_;
 
-    DhtDirectory *dht_;
-    bool dhtEnabled_;
-    bool dhtFallbackAllowed_;
-    bool dhtStartedAutomatically_;
-    QHash<QString, QDateTime> requestedAt_;
-    QString dhtStatus_;
     PortMapper *mapper_;
-    RendezvousClient *rendezvous_;
-    QStringList rendezvousHosts_;
     QString externalAddress_;      // learnt from the router
     QString manualAddress_;        // given by the user
-    QString rendezvousStatus_;
     QString lastError_;
     QDateTime lastErrorAt_;
     int connectionAttempts_;

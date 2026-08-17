@@ -18,6 +18,8 @@ TitleBarButton::TitleBarButton(Kind kind, QWidget *parent)
     setAttribute(Qt::WA_Hover, true);
 
     switch (kind_) {
+    case Pinned:   setToolTip(QString::fromLatin1("Detach this window")); break;
+    case Unpinned: setToolTip(QString::fromLatin1("Attach to the main window")); break;
     case Minimise: setToolTip(QString::fromLatin1("Minimise")); break;
     case Maximise: setToolTip(QString::fromLatin1("Maximise")); break;
     case Restore:  setToolTip(QString::fromLatin1("Restore")); break;
@@ -28,7 +30,12 @@ TitleBarButton::TitleBarButton(Kind kind, QWidget *parent)
 void TitleBarButton::setKind(Kind kind)
 {
     kind_ = kind;
-    setToolTip(kind == Restore ? QString::fromLatin1("Restore") : QString::fromLatin1("Maximise"));
+    switch (kind_) {
+    case Pinned:   setToolTip(QString::fromLatin1("Detach this window")); break;
+    case Unpinned: setToolTip(QString::fromLatin1("Attach to the main window")); break;
+    case Restore:  setToolTip(QString::fromLatin1("Restore")); break;
+    default:       setToolTip(QString::fromLatin1("Maximise")); break;
+    }
     update();
 }
 
@@ -84,6 +91,20 @@ void TitleBarButton::paintEvent(QPaintEvent *)
         painter.drawLine(QPointF(left + side - 0.5, top + 0.5),
                          QPointF(left + 0.5, top + side - 0.5));
         break;
+
+    case Pinned:
+    case Unpinned: {
+        // A pushpin: filled while attached, hollow once it floats free.
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const qreal cx = left + side / 2.0;
+        const QRectF head(cx - 3.5, top + 0.5, 7.0, 6.0);
+        painter.setBrush(kind_ == Pinned ? QBrush(ink) : QBrush(Qt::NoBrush));
+        painter.drawRoundedRect(head, 2.0, 2.0);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(QPointF(cx, head.bottom()), QPointF(cx, top + side - 0.5));
+        painter.drawLine(QPointF(cx - 4.5, head.bottom()), QPointF(cx + 4.5, head.bottom()));
+        break;
+    }
     }
 }
 
@@ -91,6 +112,9 @@ MeeruTitleBar::MeeruTitleBar(const QString &title, bool withMinimise, bool withM
     : QWidget(parent),
       titleLabel_(0),
       maximiseButton_(0),
+      pinButton_(0),
+      layout_(0),
+      pinned_(true),
       dragging_(false),
       canMaximise_(withMaximise)
 {
@@ -98,7 +122,8 @@ MeeruTitleBar::MeeruTitleBar(const QString &title, bool withMinimise, bool withM
     setFixedHeight(30);
     setAttribute(Qt::WA_StyledBackground, true);
 
-    QHBoxLayout *layout = new QHBoxLayout(this);
+    layout_ = new QHBoxLayout(this);
+    QHBoxLayout *layout = layout_;
     layout->setContentsMargins(12, 0, 6, 0);
     layout->setSpacing(2);
 
@@ -126,6 +151,34 @@ MeeruTitleBar::MeeruTitleBar(const QString &title, bool withMinimise, bool withM
 void MeeruTitleBar::setTitle(const QString &title)
 {
     titleLabel_->setText(title);
+}
+
+void MeeruTitleBar::addPinButton(bool pinned)
+{
+    if (pinButton_ || !layout_)
+        return;
+
+    pinned_ = pinned;
+    pinButton_ = new TitleBarButton(pinned ? TitleBarButton::Pinned : TitleBarButton::Unpinned, this);
+    connect(pinButton_, SIGNAL(clicked()), this, SLOT(onPin()));
+
+    // Left of minimise, so the destructive button stays on the far right where
+    // people expect it.
+    layout_->insertWidget(layout_->count() - (maximiseButton_ ? 3 : 2), pinButton_);
+}
+
+void MeeruTitleBar::setPinned(bool pinned)
+{
+    pinned_ = pinned;
+    if (pinButton_)
+        pinButton_->setKind(pinned ? TitleBarButton::Pinned : TitleBarButton::Unpinned);
+}
+
+void MeeruTitleBar::onPin()
+{
+    pinned_ = !pinned_;
+    setPinned(pinned_);
+    emit pinToggled(pinned_);
 }
 
 void MeeruTitleBar::onMinimise()

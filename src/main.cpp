@@ -3,6 +3,7 @@
 #include <QIcon>
 
 #include "login_window.h"
+#include "message_store.h"
 
 int main(int argc, char *argv[]) {
     // Meeru lays itself out in whole pixels, the way the machines it targets
@@ -20,6 +21,7 @@ int main(int argc, char *argv[]) {
 #endif
 
     QApplication app(argc, argv);
+    qRegisterMetaType<Chat::Message>("Chat::Message");
     app.setOrganizationName(QString::fromLatin1("MTA Mathery Automation"));
     app.setApplicationName(QString::fromLatin1("Meeru"));
     app.setApplicationVersion(QString::fromLatin1("0.0.1"));
