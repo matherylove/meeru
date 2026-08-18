@@ -21,6 +21,9 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <QFileInfo>
+#include <QListView>
+
 #include "crop_dialog.h"
 #include "invite_code.h"
 #include "meeru_paint.h"
@@ -44,6 +47,9 @@ QLabel *bodyLabel(const QString &text, QWidget *parent = 0)
     return label;
 }
 
+// Asks for the short name an emoji will answer to, written :like_this:.
+bool promptEmojiName(QWidget *parent, QString *name);
+
 QLineEdit *makeEdit(const QString &placeholder, QWidget *parent = 0)
 {
     QLineEdit *edit = new QLineEdit(parent);
@@ -52,6 +58,251 @@ QLineEdit *makeEdit(const QString &placeholder, QWidget *parent = 0)
     return edit;
 }
 
+bool promptEmojiName(QWidget *parent, QString *name)
+{
+    if (!name)
+        return false;
+
+    MeeruDialog dialog(QString::fromLatin1("Name this emoji"), parent);
+    dialog.setDialogWidth(340);
+
+    QLabel *caption = new QLabel(QString::fromLatin1(
+        "How should it be written in a message? Letters, numbers and underscores only."));
+    caption->setObjectName(QString::fromLatin1("dialogLabel"));
+    caption->setWordWrap(true);
+    dialog.contentLayout()->addWidget(caption);
+
+    QLineEdit *edit = new QLineEdit();
+    edit->setFixedHeight(30);
+    edit->setText(EmojiStore::sanitiseName(*name));
+    dialog.contentLayout()->addWidget(edit);
+
+    QHBoxLayout *buttons = new QHBoxLayout();
+    buttons->addStretch();
+    QPushButton *cancel = new QPushButton(QString::fromLatin1("Cancel"));
+    QPushButton *accept = new QPushButton(QString::fromLatin1("Add"));
+    accept->setObjectName(QString::fromLatin1("primaryButton"));
+    accept->setDefault(true);
+    buttons->addWidget(cancel);
+    buttons->addWidget(accept);
+    dialog.contentLayout()->addLayout(buttons);
+
+    QObject::connect(cancel, SIGNAL(clicked()), &dialog, SLOT(reject()));
+    QObject::connect(accept, SIGNAL(clicked()), &dialog, SLOT(accept()));
+    QObject::connect(edit, SIGNAL(returnPressed()), &dialog, SLOT(accept()));
+
+    edit->setFocus();
+    edit->selectAll();
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    *name = EmojiStore::sanitiseName(edit->text());
+    return !name->isEmpty();
+}
+
+}
+
+// ------------------------------------------------------------------ PollDialog
+
+PollDialog::PollDialog(QWidget *parent)
+    : MeeruDialog(QString::fromLatin1("New poll"), parent),
+      questionEdit_(0), optionLayout_(0), durationBox_(0), addOption_(0), acceptButton_(0)
+{
+    setDialogWidth(380);
+
+    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("QUESTION"), this));
+    questionEdit_ = makeEdit(QString::fromLatin1("What are we playing tonight?"), this);
+    contentLayout()->addWidget(questionEdit_);
+
+    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("ANSWERS"), this));
+    QWidget *options = new QWidget(this);
+    optionLayout_ = new QVBoxLayout(options);
+    optionLayout_->setContentsMargins(0, 0, 0, 0);
+    optionLayout_->setSpacing(6);
+    contentLayout()->addWidget(options);
+
+    for (int i = 0; i < 2; ++i)
+        onAddOption();
+
+    addOption_ = new QPushButton(QString::fromLatin1("Add another answer"), this);
+    contentLayout()->addWidget(addOption_);
+
+    contentLayout()->addWidget(fieldLabel(QString::fromLatin1("OPEN FOR"), this));
+    durationBox_ = new QComboBox(this);
+    durationBox_->setFixedHeight(30);
+    durationBox_->addItem(QString::fromLatin1("1 hour"), 3600);
+    durationBox_->addItem(QString::fromLatin1("8 hours"), 8 * 3600);
+    durationBox_->addItem(QString::fromLatin1("1 day"), 86400);
+    durationBox_->addItem(QString::fromLatin1("1 week"), 7 * 86400);
+    durationBox_->addItem(QString::fromLatin1("Until closed by hand"), 0);
+    contentLayout()->addWidget(durationBox_);
+
+    QHBoxLayout *buttons = new QHBoxLayout();
+    buttons->addStretch();
+    QPushButton *cancel = new QPushButton(QString::fromLatin1("Cancel"), this);
+    acceptButton_ = new QPushButton(QString::fromLatin1("Send poll"), this);
+    acceptButton_->setObjectName(QString::fromLatin1("primaryButton"));
+    acceptButton_->setEnabled(false);
+    buttons->addWidget(cancel);
+    buttons->addWidget(acceptButton_);
+    contentLayout()->addLayout(buttons);
+
+    connect(addOption_, SIGNAL(clicked()), this, SLOT(onAddOption()));
+    connect(cancel, SIGNAL(clicked()), this, SLOT(reject()));
+    connect(acceptButton_, SIGNAL(clicked()), this, SLOT(accept()));
+    connect(questionEdit_, SIGNAL(textChanged(QString)), this, SLOT(validate()));
+}
+
+void PollDialog::onAddOption()
+{
+    if (optionEdits_.size() >= 12)
+        return;
+
+    QLineEdit *edit = makeEdit(QString::fromLatin1("Answer %1").arg(optionEdits_.size() + 1), this);
+    optionLayout_->addWidget(edit);
+    optionEdits_.append(edit);
+    connect(edit, SIGNAL(textChanged(QString)), this, SLOT(validate()));
+
+    if (addOption_)
+        addOption_->setEnabled(optionEdits_.size() < 12);
+    validate();
+}
+
+void PollDialog::validate()
+{
+    if (!acceptButton_)
+        return;
+
+    int filled = 0;
+    for (int i = 0; i < optionEdits_.size(); ++i) {
+        if (!optionEdits_.at(i)->text().trimmed().isEmpty())
+            ++filled;
+    }
+    acceptButton_->setEnabled(!questionEdit_->text().trimmed().isEmpty() && filled >= 2);
+}
+
+Chat::Poll PollDialog::poll() const
+{
+    Chat::Poll poll;
+    poll.question = questionEdit_->text().trimmed();
+    for (int i = 0; i < optionEdits_.size(); ++i) {
+        const QString text = optionEdits_.at(i)->text().trimmed();
+        if (text.isEmpty())
+            continue;
+        Chat::PollOption option;
+        option.text = text;
+        poll.options.append(option);
+    }
+
+    const int seconds = durationBox_->itemData(durationBox_->currentIndex()).toInt();
+    if (seconds > 0)
+        poll.closesAtUtc = QDateTime::currentDateTimeUtc().addSecs(seconds);
+    return poll;
+}
+
+// ----------------------------------------------------------------- EmojiDialog
+
+EmojiDialog::EmojiDialog(const MeeruPaths &paths, const QString &identityId, QWidget *parent)
+    : MeeruDialog(QString::fromLatin1("Emoji"), parent),
+      paths_(paths), identityId_(identityId), grid_(0)
+{
+    setDialogWidth(360);
+
+    contentLayout()->addWidget(bodyLabel(QString::fromLatin1(
+        "Your own emoji. Pick one to drop it into the message, or add a new one from any picture or "
+        "animation: it is cropped square and scaled down to 256 by 256."), this));
+
+    grid_ = new QListWidget(this);
+    grid_->setViewMode(QListView::IconMode);
+    grid_->setIconSize(QSize(40, 40));
+    grid_->setGridSize(QSize(58, 62));
+    grid_->setResizeMode(QListView::Adjust);
+    grid_->setMovement(QListView::Static);
+    grid_->setFixedHeight(190);
+    grid_->setStyleSheet(QString::fromLatin1(
+        "QListWidget { background: #19121f; border: 1px solid #634A70; border-radius: 6px; }"
+        "QListWidget::item { border-radius: 4px; }"
+        "QListWidget::item:hover { background: #2f2139; }"
+        "QListWidget::item:selected { background: #4a3454; }"));
+    contentLayout()->addWidget(grid_);
+
+    QHBoxLayout *buttons = new QHBoxLayout();
+    QPushButton *add = new QPushButton(QString::fromLatin1("Add emoji"), this);
+    add->setObjectName(QString::fromLatin1("primaryButton"));
+    QPushButton *close = new QPushButton(QString::fromLatin1("Close"), this);
+    buttons->addWidget(add);
+    buttons->addStretch();
+    buttons->addWidget(close);
+    contentLayout()->addLayout(buttons);
+
+    connect(add, SIGNAL(clicked()), this, SLOT(onAdd()));
+    connect(close, SIGNAL(clicked()), this, SLOT(reject()));
+    connect(grid_, SIGNAL(itemSelectionChanged()), this, SLOT(onPicked()));
+
+    reload();
+}
+
+void EmojiDialog::reload()
+{
+    grid_->clear();
+    EmojiStore store(paths_, identityId_);
+    const QList<CustomEmoji> emoji = store.all();
+
+    for (int i = 0; i < emoji.size(); ++i) {
+        QPixmap picture(emoji.at(i).filePath);
+        if (picture.isNull())
+            continue;
+        QListWidgetItem *item = new QListWidgetItem(grid_);
+        item->setIcon(QIcon(picture.scaled(40, 40, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+        item->setToolTip(QLatin1Char(':') + emoji.at(i).name + QLatin1Char(':'));
+        item->setData(Qt::UserRole, emoji.at(i).name);
+    }
+
+    if (emoji.isEmpty()) {
+        QListWidgetItem *empty = new QListWidgetItem(QString::fromLatin1("No emoji yet"), grid_);
+        empty->setFlags(Qt::NoItemFlags);
+    }
+}
+
+void EmojiDialog::onPicked()
+{
+    const QList<QListWidgetItem *> selected = grid_->selectedItems();
+    if (selected.isEmpty())
+        return;
+    const QString name = selected.first()->data(Qt::UserRole).toString();
+    if (name.isEmpty())
+        return;
+    chosen_ = name;
+    accept();
+}
+
+void EmojiDialog::onAdd()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, QString::fromLatin1("Choose a picture or animation"), QDir::homePath(),
+        QString::fromLatin1("Pictures and animations (*.png *.jpg *.jpeg *.bmp *.gif);;All files (*)"));
+    if (path.isEmpty())
+        return;
+
+    CropDialog crop(path, 1.0, QString::fromLatin1("Crop your emoji"), this);
+    if (!crop.isReady()) {
+        crop.exec();
+        return;
+    }
+    if (crop.exec() != QDialog::Accepted)
+        return;
+
+    QString name = QFileInfo(path).completeBaseName();
+    if (!promptEmojiName(this, &name))
+        return;
+
+    EmojiStore store(paths_, identityId_);
+    QString error;
+    if (!store.add(name, path, crop.cropRect(), crop.isAnimated(), &error)) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Emoji"), error);
+        return;
+    }
+    reload();
 }
 
 // --------------------------------------------------------------- PictureDialog

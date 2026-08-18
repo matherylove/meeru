@@ -1,6 +1,11 @@
 #include "dm_window.h"
 
 #include <QCloseEvent>
+#include <QDesktopServices>
+#include <QFileDialog>
+#include <QDir>
+#include <QFileInfo>
+#include <QUrl>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -11,6 +16,7 @@
 #include <QVBoxLayout>
 
 #include "avatar.h"
+#include "meeru_dialogs.h"
 #include "meeru_paint.h"
 #include "meeru_style.h"
 #include "meeru_window.h"
@@ -41,10 +47,11 @@ DmWindow::DmWindow(const LocalProfile &profile,
                    QWidget *parent)
     : QWidget(parent, Qt::Window | Qt::FramelessWindowHint),
       profile_(profile), contact_(contact), paths_(paths), messages_(messages),
-      node_(node), anchor_(anchor), pinned_(true), online_(false),
+      node_(node), anchor_(anchor), group_(false), voice_(0), voiceButton_(0),
+      pinned_(true), online_(false),
       titleBar_(0), header_(0), avatar_(0), nameLabel_(0), presenceDot_(0),
       stateLabel_(0), statusLabel_(0), history_(0), typingLabel_(0),
-      compose_(0), footerLabel_(0), typingTimer_(0)
+      compose_(0), footerLabel_(0), sizeHint_(0), typingTimer_(0)
 {
     conversationId_ = PeerNode::directConversationId(profile_.identityId, contact_.id);
 
@@ -52,6 +59,63 @@ DmWindow::DmWindow(const LocalProfile &profile,
     setContact(contact_);
     loadHistory();
     followAnchor();
+}
+
+DmWindow::DmWindow(const LocalProfile &profile,
+                   const Roster::Conversation &conversation,
+                   const QList<Roster::Contact> &members,
+                   const MeeruPaths &paths,
+                   MessageStore *messages,
+                   PeerNode *node,
+                   QWidget *anchor,
+                   QWidget *parent)
+    : QWidget(parent, Qt::Window | Qt::FramelessWindowHint),
+      profile_(profile), members_(members), paths_(paths), messages_(messages),
+      node_(node), anchor_(anchor), group_(true), voice_(0), voiceButton_(0),
+      pinned_(true), online_(false),
+      titleBar_(0), header_(0), avatar_(0), nameLabel_(0), presenceDot_(0),
+      stateLabel_(0), statusLabel_(0), history_(0), typingLabel_(0),
+      compose_(0), footerLabel_(0), sizeHint_(0), typingTimer_(0)
+{
+    conversationId_ = conversation.id;
+    groupTitle_ = conversation.title.trimmed();
+    if (groupTitle_.isEmpty()) {
+        QStringList names;
+        for (int i = 0; i < members_.size() && names.size() < 3; ++i)
+            names.append(members_.at(i).bestName());
+        groupTitle_ = names.join(QString::fromLatin1(", "));
+    }
+
+    buildUi();
+
+    nameLabel_->setText(escape(groupTitle_));
+    stateLabel_->setText(QString::fromLatin1("%1 members").arg(members_.size() + 1));
+    statusLabel_->setText(QString::fromLatin1("Group conversation"));
+    avatar_->setInitials(MeeruPaint::initialsFor(groupTitle_));
+    avatar_->setPresenceColor(Presence::color(Presence::Available), false);
+    presenceDot_->setPixmap(MeeruPaint::presenceBadge(Presence::color(Presence::Available), 10, 9));
+    titleBar_->setTitle(groupTitle_);
+    setWindowTitle(groupTitle_);
+    footerLabel_->setText(QString::fromLatin1("Members catch up from whoever has the most"));
+
+    loadHistory();
+    followAnchor();
+}
+
+void DmWindow::setMemberOnline(const QString &peerId, bool online)
+{
+    Q_UNUSED(peerId);
+    Q_UNUSED(online);
+    if (!group_ || !node_)
+        return;
+
+    int connected = 0;
+    for (int i = 0; i < members_.size(); ++i) {
+        if (node_->isOnline(members_.at(i).id))
+            ++connected;
+    }
+    stateLabel_->setText(QString::fromLatin1("%1 of %2 members online")
+                             .arg(connected).arg(members_.size()));
 }
 
 void DmWindow::buildUi()
@@ -161,6 +225,44 @@ void DmWindow::buildUi()
     compose_->setMaxLength(4000);
     composeLayout->addWidget(compose_);
 
+    // The tools, in the order the mockup shows them.
+    QHBoxLayout *toolRow = new QHBoxLayout();
+    toolRow->setSpacing(6);
+
+    QPushButton *emoji = new QPushButton(QString::fromUtf8("\342\230\272"), composeWrap);
+    emoji->setObjectName(QString::fromLatin1("glassButton"));
+    emoji->setFixedSize(26, 26);
+    emoji->setToolTip(QString::fromLatin1("Emoji"));
+
+    QPushButton *attach = new QPushButton(QString::fromUtf8("\360\237\223\216"), composeWrap);
+    attach->setObjectName(QString::fromLatin1("glassButton"));
+    attach->setFixedSize(26, 26);
+    attach->setToolTip(QString::fromLatin1("Attach a file, picture or video"));
+
+    voiceButton_ = new QPushButton(QString::fromUtf8("\342\231\252"), composeWrap);
+    voiceButton_->setObjectName(QString::fromLatin1("glassButton"));
+    voiceButton_->setFixedSize(26, 26);
+    voiceButton_->setToolTip(VoiceRecorder::isSupported()
+        ? QString::fromLatin1("Record a voice note")
+        : QString::fromLatin1("This build has no audio support"));
+    voiceButton_->setEnabled(VoiceRecorder::isSupported());
+
+    QPushButton *poll = new QPushButton(QString::fromUtf8("\342\226\244"), composeWrap);
+    poll->setObjectName(QString::fromLatin1("glassButton"));
+    poll->setFixedSize(26, 26);
+    poll->setToolTip(QString::fromLatin1("Poll"));
+
+    sizeHint_ = new QLabel(composeWrap);
+    sizeHint_->setObjectName(QString::fromLatin1("footerText"));
+    sizeHint_->setText(QString::fromLatin1("Files are offered, not pushed"));
+
+    toolRow->addWidget(emoji);
+    toolRow->addWidget(attach);
+    toolRow->addWidget(voiceButton_);
+    toolRow->addWidget(poll);
+    toolRow->addWidget(sizeHint_, 1);
+    composeLayout->addLayout(toolRow);
+
     QHBoxLayout *footerRow = new QHBoxLayout();
     footerRow->setSpacing(8);
     footerLabel_ = new QLabel(composeWrap);
@@ -172,11 +274,23 @@ void DmWindow::buildUi()
     footerRow->addWidget(send);
     composeLayout->addLayout(footerRow);
 
+    connect(emoji, SIGNAL(clicked()), this, SLOT(onEmoji()));
+    connect(attach, SIGNAL(clicked()), this, SLOT(onAttach()));
+    connect(poll, SIGNAL(clicked()), this, SLOT(onPoll()));
+    connect(voiceButton_, SIGNAL(clicked()), this, SLOT(onVoice()));
+
     layout->addWidget(composeWrap);
 
     connect(send, SIGNAL(clicked()), this, SLOT(onSend()));
     connect(compose_, SIGNAL(returnPressed()), this, SLOT(onSend()));
     connect(compose_, SIGNAL(textChanged(QString)), this, SLOT(onComposeChanged(QString)));
+    connect(history_, SIGNAL(anchorClicked(QUrl)), this, SLOT(onHistoryLink(QUrl)));
+    history_->setOpenLinks(false);   // links inside the history are commands, not the web
+
+    if (messages_) {
+        connect(messages_, SIGNAL(transferChanged(QString,QString)),
+                this, SLOT(onTransferChanged(QString,QString)));
+    }
 
     typingTimer_ = new QTimer(this);
     typingTimer_->setSingleShot(true);
@@ -267,6 +381,71 @@ QString DmWindow::formatMessage(const Chat::Message &message, bool withHeader) c
         }
     }
 
+    if (message.kind == Chat::KindFile && message.attachment.isValid()) {
+        const Chat::Attachment &file = message.attachment;
+        const QString size = file.fileSize > 1024 * 1024
+            ? QString::fromLatin1("%1 MB").arg(file.fileSize / (1024.0 * 1024.0), 0, 'f', 1)
+            : QString::fromLatin1("%1 KB").arg(qMax(qint64(1), file.fileSize / 1024));
+
+        QString state;
+        switch (file.transfer) {
+        case Chat::TransferOffered:
+            // Nothing has been downloaded: the choice is the receiver's.
+            state = message.isMine()
+                ? QString::fromLatin1("<span class=\"mark\">offered</span>")
+                : QString::fromLatin1("<a href=\"meeru:receive/%1\">Receive</a>").arg(message.id);
+            break;
+        case Chat::TransferRunning: {
+            const int percent = file.fileSize > 0
+                ? static_cast<int>((file.received * 100) / file.fileSize) : 0;
+            state = QString::fromLatin1("<span class=\"mark\">receiving %1%</span>").arg(percent);
+            break;
+        }
+        case Chat::TransferComplete:
+            state = QString::fromLatin1("<a href=\"meeru:open/%1\">Open</a>").arg(message.id);
+            break;
+        default:
+            state = QString::fromLatin1("<span class=\"mark\">failed</span>");
+            break;
+        }
+
+        out += QString::fromLatin1("<p class=\"body\">%1 <span class=\"mark\">%2</span> %3%4</p>")
+                   .arg(escape(file.fileName)).arg(size).arg(state).arg(mark);
+        return out;
+    }
+
+    if (message.kind == Chat::KindPoll && message.poll.isValid()) {
+        out += QString::fromLatin1("<p class=\"body\"><b>%1</b></p>").arg(escape(message.poll.question));
+        int total = 0;
+        for (int i = 0; i < message.poll.options.size(); ++i)
+            total += message.poll.options.at(i).votes;
+
+        for (int i = 0; i < message.poll.options.size(); ++i) {
+            const Chat::PollOption &option = message.poll.options.at(i);
+            const int share = total > 0 ? (option.votes * 100) / total : 0;
+            const bool mine = message.poll.myVote == i;
+            const QString label = QString::fromLatin1("%1 &nbsp;<span class=\"mark\">%2%  (%3)</span>")
+                                      .arg(escape(option.text)).arg(share).arg(option.votes);
+            if (message.poll.isClosed() || mine) {
+                out += QString::fromLatin1("<p class=\"body\">%1%2</p>")
+                           .arg(mine ? QString::fromLatin1("&#9679; ") : QString::fromLatin1("&#9675; "))
+                           .arg(label);
+            } else {
+                out += QString::fromLatin1("<p class=\"body\">&#9675; <a href=\"meeru:vote/%1/%2\">%3</a></p>")
+                           .arg(message.id).arg(i).arg(label);
+            }
+        }
+        if (message.poll.closesAtUtc.isValid()) {
+            out += QString::fromLatin1("<p class=\"mark\">%1</p>")
+                       .arg(message.poll.isClosed()
+                                ? QString::fromLatin1("Closed")
+                                : QString::fromLatin1("Closes ")
+                                      + message.poll.closesAtUtc.toLocalTime()
+                                            .toString(QString::fromLatin1("d MMM h:mm AP")));
+        }
+        return out;
+    }
+
     out += QString::fromLatin1("<p class=\"body\">%1%2</p>").arg(escape(message.text)).arg(mark);
     return out;
 }
@@ -345,11 +524,202 @@ void DmWindow::onSend()
         return;
 
     compose_->clear();
-    if (node_)
-        node_->sendMessage(contact_.id, conversationId_, stored);
+    if (node_) {
+        if (group_) {
+            for (int i = 0; i < members_.size(); ++i)
+                node_->sendMessage(members_.at(i).id, conversationId_, stored);
+        } else {
+            node_->sendMessage(contact_.id, conversationId_, stored);
+        }
+    }
 
     shown_ = messages_->history(conversationId_);
     renderHistory();
+}
+
+void DmWindow::sendAttachment(const QString &path)
+{
+    QFileInfo info(path);
+    if (!info.exists() || !info.isFile() || !messages_)
+        return;
+    if (info.size() > TransferManager::maximumFileSize()) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Attach"),
+                                 QString::fromLatin1("That file is larger than Meeru will carry."));
+        return;
+    }
+
+    Chat::Message message;
+    message.conversationId = conversationId_;
+    message.kind = Chat::KindFile;
+    message.delivery = Chat::DeliveryWaiting;
+    message.sentAtUtc = QDateTime::currentDateTimeUtc();
+    message.authorName = profile_.displayName;
+    message.text = info.fileName();
+    message.attachment.fileId = Chat::newMessageId();
+    message.attachment.fileName = info.fileName();
+    message.attachment.fileSize = info.size();
+    message.attachment.media = Chat::Attachment::mediaForName(info.fileName());
+    message.attachment.transfer = Chat::TransferOffered;
+    message.attachment.localPath = path;   // the original stays where it is
+
+    const Chat::Message stored = messages_->append(message);
+    if (!stored.isValid())
+        return;
+
+    // The file itself does not move yet: only the offer does.
+    if (node_ && node_->transfers())
+        node_->transfers()->registerOutgoing(stored.attachment.fileId, path);
+    if (node_) {
+        if (group_) {
+            for (int i = 0; i < members_.size(); ++i)
+                node_->sendMessage(members_.at(i).id, conversationId_, stored);
+        } else {
+            node_->sendMessage(contact_.id, conversationId_, stored);
+        }
+    }
+
+    shown_ = messages_->history(conversationId_);
+    renderHistory();
+}
+
+void DmWindow::onAttach()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, QString::fromLatin1("Send a file"), QDir::homePath(),
+        QString::fromLatin1("All files (*)"));
+    if (!path.isEmpty())
+        sendAttachment(path);
+}
+
+void DmWindow::onEmoji()
+{
+    EmojiDialog dialog(paths_, profile_.identityId, this);
+    if (dialog.exec() != QDialog::Accepted || dialog.chosen().isEmpty())
+        return;
+    compose_->insert(QLatin1Char(':') + dialog.chosen() + QLatin1Char(':'));
+    compose_->setFocus();
+}
+
+void DmWindow::onPoll()
+{
+    PollDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const Chat::Poll poll = dialog.poll();
+    if (!poll.isValid() || !messages_)
+        return;
+
+    Chat::Message message;
+    message.conversationId = conversationId_;
+    message.kind = Chat::KindPoll;
+    message.delivery = Chat::DeliveryWaiting;
+    message.sentAtUtc = QDateTime::currentDateTimeUtc();
+    message.authorName = profile_.displayName;
+    message.text = poll.question;
+    message.poll = poll;
+
+    const Chat::Message stored = messages_->append(message);
+    if (!stored.isValid())
+        return;
+    if (node_) {
+        if (group_) {
+            for (int i = 0; i < members_.size(); ++i)
+                node_->sendMessage(members_.at(i).id, conversationId_, stored);
+        } else {
+            node_->sendMessage(contact_.id, conversationId_, stored);
+        }
+    }
+
+    shown_ = messages_->history(conversationId_);
+    renderHistory();
+}
+
+void DmWindow::onHistoryLink(const QUrl &url)
+{
+    // Links inside the conversation are commands of our own, never the web.
+    const QString path = url.toString();
+    if (!path.startsWith(QLatin1String("meeru:")))
+        return;
+
+    const QStringList parts = path.mid(6).split(QLatin1Char('/'), QString::SkipEmptyParts);
+    if (parts.isEmpty())
+        return;
+
+    if (parts.first() == QLatin1String("receive") && parts.size() == 2) {
+        // In a group the file is asked of whoever offered it, not of everybody.
+        const Chat::Message offer = messages_->message(conversationId_, parts.at(1));
+        const QString from = group_ ? offer.authorId : contact_.id;
+        if (from.isEmpty() || !node_ || !node_->receiveAttachment(from, conversationId_, parts.at(1))) {
+            MeeruDialog::showMessage(this, QString::fromLatin1("Receive"),
+                                     QString::fromLatin1("A file only travels while you are both "
+                                                         "connected. Try again when they are online."));
+        }
+        return;
+    }
+
+    if (parts.first() == QLatin1String("open") && parts.size() == 2) {
+        const Chat::Message message = messages_->message(conversationId_, parts.at(1));
+        if (!message.attachment.localPath.isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(message.attachment.localPath));
+        return;
+    }
+
+    if (parts.first() == QLatin1String("vote") && parts.size() == 3) {
+        messages_->setVote(conversationId_, parts.at(1), parts.at(2).toInt());
+        refreshDelivery();
+        return;
+    }
+}
+
+void DmWindow::onVoice()
+{
+    if (!voice_) {
+        voice_ = new VoiceRecorder(this);
+        connect(voice_, SIGNAL(levelChanged(int)), this, SLOT(onVoiceTick(int)));
+    }
+
+    if (voice_->isRecording()) {
+        const QString finished = voice_->stop();
+        voiceButton_->setText(QString::fromUtf8("\342\231\252"));
+        sizeHint_->setText(QString::fromLatin1("Files are offered, not pushed"));
+        if (!finished.isEmpty())
+            sendAttachment(finished);
+        return;
+    }
+
+    // Recorded into the attachments folder, then sent like any other file, so
+    // it follows the same offer-and-accept rule as everything else.
+    const QString directory = messages_ ? messages_->attachmentDirectory() : QString();
+    if (directory.isEmpty() || !QDir().mkpath(directory))
+        return;
+
+    const QString target = directory + QLatin1String("/voice-")
+                         + QDateTime::currentDateTimeUtc().toString(QString::fromLatin1("yyyyMMdd-HHmmss"))
+                         + QLatin1String(".wav");
+
+    QString error;
+    if (!voice_->start(target, &error)) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Voice note"), error);
+        return;
+    }
+
+    voiceButton_->setText(QString::fromUtf8("\342\226\240"));
+    sizeHint_->setText(QString::fromLatin1("Recording... press again to send"));
+}
+
+void DmWindow::onVoiceTick(int seconds)
+{
+    sizeHint_->setText(QString::fromLatin1("Recording %1:%2 - press again to send")
+                           .arg(seconds / 60)
+                           .arg(seconds % 60, 2, 10, QLatin1Char('0')));
+}
+
+void DmWindow::onTransferChanged(const QString &conversationId, const QString &messageId)
+{
+    Q_UNUSED(messageId);
+    if (conversationId == conversationId_)
+        refreshDelivery();
 }
 
 void DmWindow::onComposeChanged(const QString &text)

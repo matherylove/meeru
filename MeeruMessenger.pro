@@ -1,5 +1,12 @@
 QT += core gui widgets network
 
+# Voice notes need the multimedia module. Some static Qt builds are made
+# without it, so the feature compiles itself out rather than failing to link.
+qtHaveModule(multimedia) {
+    QT += multimedia
+    DEFINES += MEERU_HAS_AUDIO
+}
+
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 TARGET = MeeruMessenger
@@ -19,7 +26,13 @@ SOURCES += \
     src/meeru_dialogs.cpp \
     src/crop_dialog.cpp \
     src/avatar.cpp \
+    src/voice_recorder.cpp \
+    src/transfer_manager.cpp \
+    src/emoji_store.cpp \
     src/message_store.cpp \
+    src/server_model.cpp \
+    src/server_window.cpp \
+    src/media_window.cpp \
     src/dm_window.cpp \
     src/roster.cpp \
     src/identity_backup.cpp \
@@ -45,7 +58,13 @@ HEADERS += \
     src/meeru_dialogs.h \
     src/crop_dialog.h \
     src/avatar.h \
+    src/voice_recorder.h \
+    src/transfer_manager.h \
+    src/emoji_store.h \
     src/message_store.h \
+    src/server_model.h \
+    src/server_window.h \
+    src/media_window.h \
     src/dm_window.h \
     src/roster.h \
     src/identity_backup.h \

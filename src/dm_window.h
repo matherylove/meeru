@@ -8,11 +8,13 @@
 #include "meeru_paths.h"
 #include "message_store.h"
 #include "roster.h"
+#include "voice_recorder.h"
 
 class QLabel;
 class QLineEdit;
 class QTextBrowser;
 class QTimer;
+class QUrl;
 
 class AvatarFrame;
 class BannerFrame;
@@ -29,8 +31,21 @@ class DmWindow : public QWidget
     Q_OBJECT
 
 public:
+    // One to one.
     DmWindow(const LocalProfile &profile,
              const Roster::Contact &contact,
+             const MeeruPaths &paths,
+             MessageStore *messages,
+             PeerNode *node,
+             QWidget *anchor,
+             QWidget *parent = 0);
+
+    // A group. Everything below behaves the same; what changes is that a
+    // message goes to every member, and that catching up asks all of them and
+    // keeps whatever the one furthest ahead has.
+    DmWindow(const LocalProfile &profile,
+             const Roster::Conversation &conversation,
+             const QList<Roster::Contact> &members,
              const MeeruPaths &paths,
              MessageStore *messages,
              PeerNode *node,
@@ -43,6 +58,8 @@ public:
     void setContact(const Roster::Contact &contact);
     void appendMessage(const Chat::Message &message);
     void setPeerOnline(bool online);
+    void setMemberOnline(const QString &peerId, bool online);
+    bool isGroup() const { return group_; }
     void setPeerTyping(bool typing);
     void refreshDelivery();
 
@@ -58,6 +75,13 @@ protected:
 
 private slots:
     void onSend();
+    void onAttach();
+    void onEmoji();
+    void onPoll();
+    void onHistoryLink(const QUrl &url);
+    void onTransferChanged(const QString &conversationId, const QString &messageId);
+    void onVoice();
+    void onVoiceTick(int seconds);
     void onPinToggled(bool pinned);
     void onComposeChanged(const QString &text);
     void onTypingTimeout();
@@ -67,9 +91,15 @@ private:
     void loadHistory();
     void renderHistory();
     QString formatMessage(const Chat::Message &message, bool withHeader) const;
+    void sendAttachment(const QString &path);
 
     LocalProfile profile_;
     Roster::Contact contact_;
+    QList<Roster::Contact> members_;
+    bool group_;
+    QString groupTitle_;
+    VoiceRecorder *voice_;
+    class QPushButton *voiceButton_;
     MeeruPaths paths_;
     MessageStore *messages_;
     PeerNode *node_;
@@ -90,6 +120,7 @@ private:
     QLabel *typingLabel_;
     QLineEdit *compose_;
     QLabel *footerLabel_;
+    QLabel *sizeHint_;
     QTimer *typingTimer_;
 };
 

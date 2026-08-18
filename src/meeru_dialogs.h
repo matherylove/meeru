@@ -7,6 +7,8 @@
 
 #include "avatar.h"
 #include "identity_crypto.h"
+#include "emoji_store.h"
+#include "message_store.h"
 #include "peer_node.h"
 #include "identity_store.h"
 #include "meeru_window.h"
@@ -88,6 +90,52 @@ private slots:
 
 private:
     Choice choice_;
+};
+
+// Writing a poll: a question, between two and twelve answers, and how long it
+// stays open.
+class PollDialog : public MeeruDialog
+{
+    Q_OBJECT
+
+public:
+    explicit PollDialog(QWidget *parent = 0);
+    Chat::Poll poll() const;
+
+private slots:
+    void onAddOption();
+    void validate();
+
+private:
+    QLineEdit *questionEdit_;
+    QList<QLineEdit *> optionEdits_;
+    QVBoxLayout *optionLayout_;
+    QComboBox *durationBox_;
+    QPushButton *addOption_;
+    QPushButton *acceptButton_;
+};
+
+// Choosing an emoji, and adding new ones. Anything added is cropped square and
+// scaled to at most 256 by 256.
+class EmojiDialog : public MeeruDialog
+{
+    Q_OBJECT
+
+public:
+    EmojiDialog(const MeeruPaths &paths, const QString &identityId, QWidget *parent = 0);
+    QString chosen() const { return chosen_; }
+
+private slots:
+    void onAdd();
+    void onPicked();
+
+private:
+    void reload();
+
+    MeeruPaths paths_;
+    QString identityId_;
+    QString chosen_;
+    QListWidget *grid_;
 };
 
 // Adding a friend by their Meeru ID, which queues a trust request.

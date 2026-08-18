@@ -23,7 +23,65 @@ namespace Chat {
 
 enum Kind {
     KindText = 0,
-    KindSystem = 1
+    KindSystem = 1,
+    KindFile = 2,      // anything attached, including pictures and video
+    KindPoll = 3
+};
+
+// A file is announced first and only travels once the receiver asks for it,
+// so nobody has somebody else's holiday video pushed onto their disk.
+enum Transfer {
+    TransferOffered = 0,
+    TransferRequested = 1,
+    TransferRunning = 2,
+    TransferComplete = 3,
+    TransferFailed = 4
+};
+
+// What an attachment is, which decides where it shows up in the media, files
+// and links sections later on.
+enum Media {
+    MediaOther = 0,
+    MediaImage = 1,
+    MediaVideo = 2,
+    MediaAnimation = 3,
+    MediaAudio = 4,
+    MediaDocument = 5
+};
+
+struct Attachment
+{
+    Attachment();
+
+    QString fileId;        // 32 hex, chosen by the sender
+    QString fileName;
+    qint64 fileSize;
+    int media;
+    int transfer;
+    QString localPath;     // filled in once it is here
+    qint64 received;
+
+    bool isValid() const;
+    static int mediaForName(const QString &fileName);
+};
+
+struct PollOption
+{
+    PollOption() : votes(0) {}
+    QString text;
+    int votes;
+};
+
+struct Poll
+{
+    Poll();
+    QString question;
+    QList<PollOption> options;
+    QDateTime closesAtUtc;
+    int myVote;            // -1 when not voted
+
+    bool isValid() const;
+    bool isClosed(const QDateTime &now = QDateTime::currentDateTimeUtc()) const;
 };
 
 enum Delivery {
@@ -45,6 +103,8 @@ struct Message
     int kind;
     int delivery;
     QDateTime sentAtUtc;
+    Attachment attachment;
+    Poll poll;
 
     bool isValid() const;
     bool isMine() const { return authorId.isEmpty(); }
@@ -76,6 +136,12 @@ public:
     bool contains(const QString &conversationId, const QString &messageId) const;
 
     void setDelivery(const QString &conversationId, const QString &messageId, int delivery);
+    void setTransfer(const QString &conversationId, const QString &messageId,
+                     int transfer, qint64 received, const QString &localPath = QString());
+    void setVote(const QString &conversationId, const QString &messageId, int option);
+
+    Chat::Message message(const QString &conversationId, const QString &messageId) const;
+    QString attachmentDirectory() const;
 
     // Everything still waiting to be handed to a particular contact.
     QList<Chat::Message> waitingFor(const QString &conversationId) const;
@@ -86,6 +152,7 @@ public:
 signals:
     void messageAdded(const QString &conversationId, const Chat::Message &message);
     void deliveryChanged(const QString &conversationId, const QString &messageId, int delivery);
+    void transferChanged(const QString &conversationId, const QString &messageId);
 
 private:
     QString filePath(const QString &conversationId) const;

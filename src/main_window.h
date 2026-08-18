@@ -32,6 +32,7 @@ class AvatarFrame;
 class BannerFrame;
 class ContactCard;
 class DmWindow;
+class ServerWindow;
 class ClickableLabel;
 class MeeruTitleBar;
 
@@ -81,6 +82,7 @@ private slots:
     void onChatMessage(const QString &peerId, const QString &conversationId, const Chat::Message &message);
     void onMessageDelivered(const QString &conversationId, const QString &messageId);
     void onDmClosed(const QString &peerId);
+    void onRoomClosed(const QString &roomId);
 
 private:
     void buildUi();
@@ -101,6 +103,8 @@ private:
     QPixmap contactTile(const Roster::Contact &contact) const;
     void hideContactCard();
     DmWindow *openDirectMessage(const QString &peerId);
+    ServerWindow *openGroup(const QString &conversationId);
+    ServerWindow *openServerWindow(const QString &serverId);
     void applyPresence(int state, bool animate);
 
     void addMessagesEntry();
@@ -152,6 +156,7 @@ private:
     MessageStore *messages_;
     PeerNode *node_;
     QHash<QString, DmWindow *> chats_;
+    QHash<QString, ServerWindow *> rooms_;
     QString networkStatus_;
     ContactCard *card_;
     QTimer *hoverTimer_;

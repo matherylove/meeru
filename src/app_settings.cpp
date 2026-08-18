@@ -46,7 +46,7 @@ bool writeObject(const QString &path, const QJsonObject &object, QString *error)
 AppSettings::AppSettings()
     : formatVersion(1), presence(QString::fromLatin1("available")), startWithWindows(true),
       inviteLifetimeSeconds(Invite::defaultLifetime()),
-      useUpnp(true), firewallProfiles(FirewallHelper::defaultProfiles()), listenPort(0)
+      useUpnp(true), adultAllowed(false), firewallProfiles(FirewallHelper::defaultProfiles()), listenPort(0)
 {
 }
 
@@ -81,6 +81,7 @@ AppSettings SettingsStore::load() const
             settings.inviteLifetimeSeconds = 0;
     }
     settings.useUpnp = object.value("useUpnp").toBool(true);
+    settings.adultAllowed = object.value("adultAllowed").toBool(false);
     if (object.contains("firewallProfiles"))
         settings.firewallProfiles = object.value("firewallProfiles").toString();
     settings.listenPort = object.value("listenPort").toInt(0);
@@ -101,6 +102,7 @@ bool SettingsStore::save(const AppSettings &settings, QString *error) const
     object.insert("startWithWindows", settings.startWithWindows);
     object.insert("inviteLifetimeSeconds", static_cast<double>(settings.inviteLifetimeSeconds));
     object.insert("useUpnp", settings.useUpnp);
+    object.insert("adultAllowed", settings.adultAllowed);
     object.insert("firewallProfiles", settings.firewallProfiles);
     object.insert("listenPort", settings.listenPort);
     object.insert("publicAddress", settings.publicAddress);

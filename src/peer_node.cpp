@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkInterface>
@@ -79,6 +80,8 @@ const char kMsgChat[] = "chat";
 const char kMsgChatAck[] = "chat-ack";
 const char kMsgHistoryRequest[] = "history-request";
 const char kMsgTyping[] = "typing";
+const char kMsgFileRequest[] = "file-request";
+const char kMsgFileChunk[] = "file-chunk";
 
 QString peerDirectory(const MeeruPaths &paths, const QString &ownerId, const QString &peerId)
 {
@@ -153,6 +156,7 @@ PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
     : QObject(parent),
       paths_(paths),
       messages_(0),
+      transfers_(0),
       server_(0),
       discovery_(0),
       announceTimer_(0),
@@ -552,6 +556,18 @@ bool PeerNode::isAccepted(const QString &peerId) const
     return contactState(peerId) == Roster::ContactAccepted;
 }
 
+void PeerNode::setConversations(const QList<Roster::Conversation> &conversations)
+{
+    groupsOf_.clear();
+    for (int i = 0; i < conversations.size(); ++i) {
+        const Roster::Conversation &conversation = conversations.at(i);
+        if (!conversation.group)
+            continue;   // one to one conversations are named after the pair
+        for (int j = 0; j < conversation.members.size(); ++j)
+            groupsOf_[conversation.members.at(j)].append(conversation.id);
+    }
+}
+
 void PeerNode::setLocalProfile(const QString &displayName, const QString &presence, const QString &statusText)
 {
     profile_.displayName = displayName;
@@ -848,6 +864,12 @@ void PeerNode::onSessionEstablished(const QString &peerId)
         sendPicture(session, QString::fromLatin1("banner"));
         deliverWaiting(peerId, session);
         requestHistory(peerId, directConversationId(profile_.identityId, peerId));
+
+        // Ask about every group we share. Whoever is further ahead answers with
+        // the difference, which is how somebody who has been away catches up.
+        const QStringList groups = groupsOf_.value(peerId);
+        for (int i = 0; i < groups.size(); ++i)
+            requestHistory(peerId, groups.at(i));
     }
 
     emit peerConnected(peerId);
@@ -871,8 +893,11 @@ void PeerNode::onSessionFailed(const QString &peerId, const QString &reason)
             sessions_.remove(peerId);
         session->deleteLater();
     }
-    if (!peerId.isEmpty())
+    if (!peerId.isEmpty()) {
+        if (transfers_)
+            transfers_->abortFor(peerId);
         emit peerDisconnected(peerId);
+    }
     emitStatus();
 }
 
@@ -961,6 +986,18 @@ void PeerNode::acceptContact(const QString &peerId)
 void PeerNode::setMessageStore(MessageStore *store)
 {
     messages_ = store;
+
+    delete transfers_;
+    transfers_ = store ? new TransferManager(store, profile_.identityId, this) : 0;
+}
+
+bool PeerNode::receiveAttachment(const QString &peerId, const QString &conversationId,
+                                 const QString &messageId)
+{
+    PeerSession *session = sessions_.value(peerId, 0);
+    if (!transfers_ || !session || !session->isEstablished())
+        return false;
+    return transfers_->beginReceive(conversationId, messageId, peerId, session);
 }
 
 void PeerNode::sendChat(PeerSession *session, const QString &conversationId, const Chat::Message &message)
@@ -976,6 +1013,27 @@ void PeerNode::sendChat(PeerSession *session, const QString &conversationId, con
     object.insert("kind", message.kind);
     object.insert("sentAtUtc", message.sentAtUtc.toString(Qt::ISODate));
     object.insert("authorName", profile_.displayName);
+
+    if (message.attachment.isValid()) {
+        QJsonObject attachment;
+        attachment.insert("fileId", message.attachment.fileId);
+        attachment.insert("fileName", message.attachment.fileName);
+        attachment.insert("fileSize", static_cast<double>(message.attachment.fileSize));
+        attachment.insert("media", message.attachment.media);
+        object.insert("attachment", attachment);
+    }
+
+    if (message.poll.isValid()) {
+        QJsonArray options;
+        for (int i = 0; i < message.poll.options.size(); ++i)
+            options.append(message.poll.options.at(i).text);
+        QJsonObject poll;
+        poll.insert("question", message.poll.question);
+        poll.insert("options", options);
+        poll.insert("closesAtUtc", message.poll.closesAtUtc.toString(Qt::ISODate));
+        object.insert("poll", poll);
+    }
+
     session->sendControl(object);
 }
 
@@ -999,11 +1057,22 @@ void PeerNode::deliverWaiting(const QString &peerId, PeerSession *session)
     if (!messages_ || !session || !session->isEstablished())
         return;
 
-    const QString conversationId = directConversationId(profile_.identityId, peerId);
-    const QList<Chat::Message> waiting = messages_->waitingFor(conversationId);
-    for (int i = 0; i < waiting.size(); ++i) {
-        sendChat(session, conversationId, waiting.at(i));
-        messages_->setDelivery(conversationId, waiting.at(i).id, Chat::DeliverySent);
+    QStringList conversations;
+    conversations.append(directConversationId(profile_.identityId, peerId));
+    conversations += groupsOf_.value(peerId);
+
+    for (int c = 0; c < conversations.size(); ++c) {
+        const QString conversationId = conversations.at(c);
+        const QList<Chat::Message> waiting = messages_->waitingFor(conversationId);
+        for (int i = 0; i < waiting.size(); ++i) {
+            sendChat(session, conversationId, waiting.at(i));
+
+            // In a group the same message goes to several people, so it counts
+            // as sent only once the last of them has had it. Marking it here is
+            // near enough: a member who was missed gets it from whoever has the
+            // longer history the next time they connect.
+            messages_->setDelivery(conversationId, waiting.at(i).id, Chat::DeliverySent);
+        }
     }
 }
 
@@ -1166,6 +1235,29 @@ void PeerNode::onSessionMessage(const QString &peerId, const QJsonObject &object
         message.delivery = Chat::DeliveryReceived;
         message.sentAtUtc = QDateTime::fromString(object.value("sentAtUtc").toString(), Qt::ISODate);
 
+        const QJsonObject attachment = object.value("attachment").toObject();
+        if (!attachment.isEmpty()) {
+            message.attachment.fileId = attachment.value("fileId").toString();
+            message.attachment.fileName = attachment.value("fileName").toString();
+            message.attachment.fileSize = static_cast<qint64>(attachment.value("fileSize").toDouble());
+            message.attachment.media = attachment.value("media").toInt(Chat::MediaOther);
+            message.attachment.transfer = Chat::TransferOffered;
+            if (message.attachment.fileSize > TransferManager::maximumFileSize())
+                return;
+        }
+
+        const QJsonObject poll = object.value("poll").toObject();
+        if (!poll.isEmpty()) {
+            message.poll.question = poll.value("question").toString();
+            message.poll.closesAtUtc = QDateTime::fromString(poll.value("closesAtUtc").toString(), Qt::ISODate);
+            const QJsonArray options = poll.value("options").toArray();
+            for (int i = 0; i < options.size() && i < 12; ++i) {
+                Chat::PollOption option;
+                option.text = options.at(i).toString();
+                message.poll.options.append(option);
+            }
+        }
+
         if (message.text.size() > 8000 || message.id.isEmpty() || message.conversationId.isEmpty())
             return;
         if (!message.sentAtUtc.isValid())
@@ -1216,6 +1308,18 @@ void PeerNode::onSessionMessage(const QString &peerId, const QJsonObject &object
             emit typingChanged(peerId, object.value("conversation").toString(),
                                object.value("typing").toBool(false));
         }
+        return;
+    }
+
+    if (type == QLatin1String(kMsgFileRequest)) {
+        if (isAccepted(peerId) && transfers_ && session)
+            transfers_->handleRequest(peerId, session, object);
+        return;
+    }
+
+    if (type == QLatin1String(kMsgFileChunk)) {
+        if (isAccepted(peerId) && transfers_)
+            transfers_->handleChunk(peerId, session, object, blob);
         return;
     }
 

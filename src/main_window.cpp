@@ -31,6 +31,7 @@
 
 #include "contact_card.h"
 #include "dm_window.h"
+#include "server_window.h"
 #include "firewall_helper.h"
 #include "meeru_dialogs.h"
 #include "meeru_paint.h"
@@ -1117,8 +1118,7 @@ void MainWindow::openConversation(const QString &conversationId)
         break;
     }
 
-    // Group conversations get their own window in the next part of this work.
-    notYetAvailable(QString::fromLatin1("Group conversations"));
+    openGroup(conversationId);
 }
 
 DmWindow *MainWindow::openDirectMessage(const QString &peerId)
@@ -1136,7 +1136,6 @@ DmWindow *MainWindow::openDirectMessage(const QString &peerId)
     }
 
     DmWindow *window = new DmWindow(profile_, roster_.contact(peerId), paths_, messages_, node_, this);
-    window->setAttribute(Qt::WA_DeleteOnClose, false);
     window->setWindowIcon(windowIcon());
     window->setPeerOnline(node_ && node_->isOnline(peerId));
     connect(window, SIGNAL(closed(QString)), this, SLOT(onDmClosed(QString)));
@@ -1145,6 +1144,78 @@ DmWindow *MainWindow::openDirectMessage(const QString &peerId)
     window->show();
     window->followAnchor();
     return window;
+}
+
+ServerWindow *MainWindow::openGroup(const QString &conversationId)
+{
+    if (rooms_.contains(conversationId)) {
+        ServerWindow *existing = rooms_.value(conversationId);
+        existing->show();
+        existing->raise();
+        existing->activateWindow();
+        return existing;
+    }
+
+    Roster::Conversation conversation;
+    const QList<Roster::Conversation> all = roster_.conversations();
+    for (int i = 0; i < all.size(); ++i) {
+        if (all.at(i).id == conversationId) {
+            conversation = all.at(i);
+            break;
+        }
+    }
+    if (conversation.id.isEmpty())
+        return 0;
+
+    QList<Roster::Contact> members;
+    for (int i = 0; i < conversation.members.size(); ++i)
+        members.append(roster_.contact(conversation.members.at(i)));
+
+    ServerWindow *window = new ServerWindow(profile_, conversation, members, paths_,
+                                            messages_, node_, this);
+    window->setWindowIcon(windowIcon());
+    connect(window, SIGNAL(closed(QString)), this, SLOT(onRoomClosed(QString)));
+    rooms_.insert(conversationId, window);
+    window->show();
+    window->followAnchor();
+    return window;
+}
+
+ServerWindow *MainWindow::openServerWindow(const QString &serverId)
+{
+    if (rooms_.contains(serverId)) {
+        ServerWindow *existing = rooms_.value(serverId);
+        existing->show();
+        existing->raise();
+        existing->activateWindow();
+        return existing;
+    }
+
+    Roster::Server server;
+    const QList<Roster::Server> all = roster_.servers();
+    for (int i = 0; i < all.size(); ++i) {
+        if (all.at(i).id == serverId) {
+            server = all.at(i);
+            break;
+        }
+    }
+    if (server.id.isEmpty())
+        return 0;
+
+    ServerWindow *window = new ServerWindow(profile_, server, paths_, messages_, node_, this);
+    window->setWindowIcon(windowIcon());
+    connect(window, SIGNAL(closed(QString)), this, SLOT(onRoomClosed(QString)));
+    rooms_.insert(serverId, window);
+    window->show();
+    window->followAnchor();
+    return window;
+}
+
+void MainWindow::onRoomClosed(const QString &roomId)
+{
+    ServerWindow *window = rooms_.take(roomId);
+    if (window)
+        window->deleteLater();
 }
 
 void MainWindow::onDmClosed(const QString &peerId)
@@ -1170,10 +1241,16 @@ void MainWindow::onChatMessage(const QString &peerId, const QString &conversatio
         conversation.createdAtUtc = QDateTime::currentDateTimeUtc();
         conversation.updatedAtUtc = conversation.createdAtUtc;
         roster_.addConversation(conversation, 0);
+        if (node_)
+            node_->setConversations(roster_.conversations());
     }
 
     if (chats_.contains(peerId))
         chats_.value(peerId)->appendMessage(message);
+
+    QHash<QString, ServerWindow *>::const_iterator room = rooms_.constBegin();
+    for (; room != rooms_.constEnd(); ++room)
+        room.value()->appendMessage(message);
 
     Q_UNUSED(conversationId);
     refreshList();
@@ -1195,6 +1272,14 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // Conversation windows are top level so they can be dragged away from the
     // main one; that means closing this window has to take them with it, or
     // Meeru would linger with no way back to it.
+    const QList<ServerWindow *> roomWindows = rooms_.values();
+    rooms_.clear();
+    for (int i = 0; i < roomWindows.size(); ++i) {
+        roomWindows.at(i)->disconnect(this);
+        roomWindows.at(i)->close();
+        roomWindows.at(i)->deleteLater();
+    }
+
     const QList<DmWindow *> windows = chats_.values();
     chats_.clear();
     for (int i = 0; i < windows.size(); ++i) {
@@ -1212,6 +1297,9 @@ void MainWindow::moveEvent(QMoveEvent *event)
     QHash<QString, DmWindow *>::const_iterator it = chats_.constBegin();
     for (; it != chats_.constEnd(); ++it)
         it.value()->followAnchor();
+    QHash<QString, ServerWindow *>::const_iterator room = rooms_.constBegin();
+    for (; room != rooms_.constEnd(); ++room)
+        room.value()->followAnchor();
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -1224,8 +1312,7 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 
 void MainWindow::openServer(const QString &serverId)
 {
-    Q_UNUSED(serverId);
-    notYetAvailable(QString::fromLatin1("Servers"));
+    openServerWindow(serverId);
 }
 
 void MainWindow::onItemActivated(QListWidgetItem *item)
@@ -1493,6 +1580,7 @@ void MainWindow::startNetwork()
     }
 
     node_->setContacts(roster_.contacts());
+    node_->setConversations(roster_.conversations());
     publishProfile();
     publishPictures();
 
@@ -1602,6 +1690,7 @@ void MainWindow::onTrustRequest(const QString &peerId, const QString &displayNam
     }
 
     node_->setContacts(roster_.contacts());
+    node_->setConversations(roster_.conversations());
     refreshList();
     refreshNews();
 }

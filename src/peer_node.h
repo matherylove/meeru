@@ -12,6 +12,7 @@
 #include "identity_store.h"
 #include "meeru_paths.h"
 #include "message_store.h"
+#include "transfer_manager.h"
 #include "roster.h"
 
 class PeerSession;
@@ -87,6 +88,10 @@ public:
     // ones only get what a request needs, strangers get nothing.
     void setContacts(const QList<Roster::Contact> &contacts);
 
+    // Group conversations, so that connecting to one member delivers whatever
+    // was written to that group while they were away.
+    void setConversations(const QList<Roster::Conversation> &conversations);
+
     void setLocalProfile(const QString &displayName, const QString &presence, const QString &statusText);
     void setLocalPictures(const QString &avatarFile, const QString &bannerFile);
 
@@ -100,6 +105,10 @@ public:
     void setMessageStore(MessageStore *store);
     void sendMessage(const QString &peerId, const QString &conversationId, const Chat::Message &message);
     void requestHistory(const QString &peerId, const QString &conversationId);
+
+    // Attachments travel only when the receiver asks; this starts that ask.
+    bool receiveAttachment(const QString &peerId, const QString &conversationId, const QString &messageId);
+    TransferManager *transfers() const { return transfers_; }
     void forgetPeer(const QString &peerId);
 
     bool isOnline(const QString &peerId) const;
@@ -165,6 +174,7 @@ private:
 
     MeeruPaths paths_;
     MessageStore *messages_;
+    TransferManager *transfers_;
     LocalProfile profile_;
     IdentityMaterial material_;
     QString statusText_;
@@ -183,6 +193,7 @@ private:
     QHash<QString, QString> pendingHints_;      // peer id -> address the user typed
     QHash<QString, QString> pendingRequests_;   // peer id -> message to deliver once connected
     QHash<QString, int> contactStates_;
+    QHash<QString, QStringList> groupsOf_;   // peer id -> conversation ids
     QHash<QTcpSocket *, QString> connecting_;
 
     PortMapper *mapper_;
