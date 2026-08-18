@@ -109,6 +109,10 @@ public:
     // Attachments travel only when the receiver asks; this starts that ask.
     bool receiveAttachment(const QString &peerId, const QString &conversationId, const QString &messageId);
     TransferManager *transfers() const { return transfers_; }
+
+    // Calls. The engine makes the media; this puts it on the wire and hands
+    // back whatever arrives.
+    void setCallEngine(class CallEngine *engine);
     void forgetPeer(const QString &peerId);
 
     bool isOnline(const QString &peerId) const;
@@ -141,6 +145,13 @@ signals:
     void messageReceived(const QString &peerId, const QString &conversationId, const Chat::Message &message);
     void messageDelivered(const QString &conversationId, const QString &messageId);
     void typingChanged(const QString &peerId, const QString &conversationId, bool typing);
+    void callSignal(const QString &peerId, const QString &conversationId,
+                    const QString &kind, bool withVideo);
+
+public slots:
+    void onCallAudio(const QStringList &participants, const QByteArray &pcm);
+    void onCallVideo(const QStringList &participants, const QByteArray &jpeg, int source);
+    void onCallSignal(const QStringList &participants, const QString &kind, bool withVideo);
 
 private slots:
     void onIncomingConnection();
@@ -175,6 +186,7 @@ private:
     MeeruPaths paths_;
     MessageStore *messages_;
     TransferManager *transfers_;
+    class CallEngine *call_;
     LocalProfile profile_;
     IdentityMaterial material_;
     QString statusText_;

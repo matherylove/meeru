@@ -72,6 +72,8 @@ public:
 
 signals:
     void closed(const QString &serverId);
+    void callRequested(const QString &conversationId, const QStringList &participants,
+                       const QString &title, bool withVideo);
 
 protected:
     void closeEvent(QCloseEvent *event);

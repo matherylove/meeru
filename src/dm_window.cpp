@@ -2,6 +2,8 @@
 
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QFrame>
 #include <QFileDialog>
 #include <QDir>
 #include <QFileInfo>
@@ -193,8 +195,24 @@ void DmWindow::buildUi()
     columnLayout->addSpacing(4);
     columnLayout->addWidget(statusLabel_);
 
+    // Calling lives in the header, beside the person being called.
+    QPushButton *call = new QPushButton(QString::fromUtf8("\342\230\216"), header_);
+    call->setObjectName(QString::fromLatin1("glassButton"));
+    call->setFixedSize(26, 26);
+    call->setToolTip(QString::fromLatin1("Call"));
+
+    QPushButton *videoCall = new QPushButton(QString::fromUtf8("\342\226\266"), header_);
+    videoCall->setObjectName(QString::fromLatin1("glassButton"));
+    videoCall->setFixedSize(26, 26);
+    videoCall->setToolTip(QString::fromLatin1("Call and share a screen"));
+
     headerLayout->addWidget(column, 1, Qt::AlignVCenter);
+    headerLayout->addWidget(call, 0, Qt::AlignVCenter);
+    headerLayout->addWidget(videoCall, 0, Qt::AlignVCenter);
     layout->addWidget(header_);
+
+    connect(call, SIGNAL(clicked()), this, SLOT(onCall()));
+    connect(videoCall, SIGNAL(clicked()), this, SLOT(onVideoCall()));
 
     // --- the conversation
     history_ = new QTextBrowser(root);
@@ -670,6 +688,32 @@ void DmWindow::onHistoryLink(const QUrl &url)
         refreshDelivery();
         return;
     }
+}
+
+void DmWindow::onCall()
+{
+    QStringList participants;
+    if (group_) {
+        for (int i = 0; i < members_.size(); ++i)
+            participants.append(members_.at(i).id);
+    } else {
+        participants.append(contact_.id);
+    }
+    emit callRequested(conversationId_, participants,
+                       group_ ? groupTitle_ : contact_.bestName(), false);
+}
+
+void DmWindow::onVideoCall()
+{
+    QStringList participants;
+    if (group_) {
+        for (int i = 0; i < members_.size(); ++i)
+            participants.append(members_.at(i).id);
+    } else {
+        participants.append(contact_.id);
+    }
+    emit callRequested(conversationId_, participants,
+                       group_ ? groupTitle_ : contact_.bestName(), true);
 }
 
 void DmWindow::onVoice()

@@ -15,6 +15,7 @@
 #include <QUdpSocket>
 
 #include "avatar.h"
+#include "call_engine.h"
 #include "peer_session.h"
 #include "port_mapper.h"
 #include "presence.h"
@@ -82,6 +83,9 @@ const char kMsgHistoryRequest[] = "history-request";
 const char kMsgTyping[] = "typing";
 const char kMsgFileRequest[] = "file-request";
 const char kMsgFileChunk[] = "file-chunk";
+const char kMsgCall[] = "call";
+const char kMsgCallAudio[] = "call-audio";
+const char kMsgCallVideo[] = "call-video";
 
 QString peerDirectory(const MeeruPaths &paths, const QString &ownerId, const QString &peerId)
 {
@@ -157,6 +161,7 @@ PeerNode::PeerNode(const MeeruPaths &paths, QObject *parent)
       paths_(paths),
       messages_(0),
       transfers_(0),
+      call_(0),
       server_(0),
       discovery_(0),
       announceTimer_(0),
@@ -896,6 +901,8 @@ void PeerNode::onSessionFailed(const QString &peerId, const QString &reason)
     if (!peerId.isEmpty()) {
         if (transfers_)
             transfers_->abortFor(peerId);
+        if (call_)
+            call_->peerLeft(peerId);
         emit peerDisconnected(peerId);
     }
     emitStatus();
@@ -989,6 +996,58 @@ void PeerNode::setMessageStore(MessageStore *store)
 
     delete transfers_;
     transfers_ = store ? new TransferManager(store, profile_.identityId, this) : 0;
+}
+
+void PeerNode::setCallEngine(CallEngine *engine)
+{
+    call_ = engine;
+    if (!call_)
+        return;
+
+    connect(call_, SIGNAL(audioReady(QStringList,QByteArray)),
+            this, SLOT(onCallAudio(QStringList,QByteArray)));
+    connect(call_, SIGNAL(videoReady(QStringList,QByteArray,int)),
+            this, SLOT(onCallVideo(QStringList,QByteArray,int)));
+    connect(call_, SIGNAL(signalReady(QStringList,QString,bool)),
+            this, SLOT(onCallSignal(QStringList,QString,bool)));
+}
+
+void PeerNode::onCallAudio(const QStringList &participants, const QByteArray &pcm)
+{
+    QJsonObject header;
+    header.insert("type", QString::fromLatin1(kMsgCallAudio));
+    for (int i = 0; i < participants.size(); ++i) {
+        PeerSession *session = sessions_.value(participants.at(i), 0);
+        if (session && session->isEstablished())
+            session->sendPayload(header, pcm);
+    }
+}
+
+void PeerNode::onCallVideo(const QStringList &participants, const QByteArray &jpeg, int source)
+{
+    QJsonObject header;
+    header.insert("type", QString::fromLatin1(kMsgCallVideo));
+    header.insert("source", source);
+    for (int i = 0; i < participants.size(); ++i) {
+        PeerSession *session = sessions_.value(participants.at(i), 0);
+        if (session && session->isEstablished())
+            session->sendPayload(header, jpeg);
+    }
+}
+
+void PeerNode::onCallSignal(const QStringList &participants, const QString &kind, bool withVideo)
+{
+    QJsonObject object;
+    object.insert("type", QString::fromLatin1(kMsgCall));
+    object.insert("kind", kind);
+    object.insert("video", withVideo);
+    object.insert("conversation", call_ ? call_->conversationId() : QString());
+
+    for (int i = 0; i < participants.size(); ++i) {
+        PeerSession *session = sessions_.value(participants.at(i), 0);
+        if (session && session->isEstablished())
+            session->sendControl(object);
+    }
 }
 
 bool PeerNode::receiveAttachment(const QString &peerId, const QString &conversationId,
@@ -1320,6 +1379,26 @@ void PeerNode::onSessionMessage(const QString &peerId, const QJsonObject &object
     if (type == QLatin1String(kMsgFileChunk)) {
         if (isAccepted(peerId) && transfers_)
             transfers_->handleChunk(peerId, session, object, blob);
+        return;
+    }
+
+    if (type == QLatin1String(kMsgCall)) {
+        if (!isAccepted(peerId))
+            return;   // only people you have accepted may ring you
+        emit callSignal(peerId, object.value("conversation").toString(),
+                        object.value("kind").toString(), object.value("video").toBool(false));
+        return;
+    }
+
+    if (type == QLatin1String(kMsgCallAudio)) {
+        if (isAccepted(peerId) && call_)
+            call_->handleAudio(peerId, blob);
+        return;
+    }
+
+    if (type == QLatin1String(kMsgCallVideo)) {
+        if (isAccepted(peerId) && call_)
+            call_->handleVideo(peerId, blob, object.value("source").toInt(0));
         return;
     }
 

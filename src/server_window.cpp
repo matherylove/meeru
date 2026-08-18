@@ -1,10 +1,13 @@
 #include "server_window.h"
 
 #include <QCloseEvent>
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QDateTime>
 #include <QHBoxLayout>
+#include <QFrame>
 #include <QLabel>
+#include <QListView>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
@@ -724,10 +727,26 @@ void ServerWindow::onSideChoice()
 
     switch (section_) {
     case SectionChannels:
-    case SectionThreads:
+    case SectionThreads: {
         channelId_ = item->data(Qt::UserRole).toString();
+        const Server::Channel chosen = model_.channel(channelId_);
+
+        // Joining a voice channel is a call with everybody in the server.
+        if (chosen.kind == Server::ChannelVoice) {
+            QStringList participants;
+            const QList<Server::Member> members = model_.members();
+            for (int i = 0; i < members.size(); ++i) {
+                if (members.at(i).identityId != profile_.identityId)
+                    participants.append(members.at(i).identityId);
+            }
+            emit callRequested(chosen.conversationId(serverId_), participants,
+                               model_.name() + QString::fromLatin1(" - ") + chosen.name, true);
+            return;
+        }
+
         showChat(channelId_);
         break;
+    }
 
     case SectionMembers:
         showChat(channelId_);

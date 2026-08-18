@@ -10,6 +10,7 @@
 #include "avatar.h"
 #include "identity_store.h"
 #include "meeru_paths.h"
+#include "call_engine.h"
 #include "message_store.h"
 #include "peer_node.h"
 #include "roster.h"
@@ -33,6 +34,7 @@ class BannerFrame;
 class ContactCard;
 class DmWindow;
 class ServerWindow;
+class CallWindow;
 class ClickableLabel;
 class MeeruTitleBar;
 
@@ -83,6 +85,13 @@ private slots:
     void onMessageDelivered(const QString &conversationId, const QString &messageId);
     void onDmClosed(const QString &peerId);
     void onRoomClosed(const QString &roomId);
+    void onCallSignal(const QString &peerId, const QString &conversationId,
+                      const QString &kind, bool withVideo);
+    void onCallWindowClosed();
+
+    // Started from a conversation window or a voice channel.
+    void beginCall(const QString &conversationId, const QStringList &participants,
+                   const QString &title, bool withVideo);
 
 private:
     void buildUi();
@@ -103,6 +112,7 @@ private:
     QPixmap contactTile(const Roster::Contact &contact) const;
     void hideContactCard();
     DmWindow *openDirectMessage(const QString &peerId);
+private:
     ServerWindow *openGroup(const QString &conversationId);
     ServerWindow *openServerWindow(const QString &serverId);
     void applyPresence(int state, bool animate);
@@ -157,6 +167,8 @@ private:
     PeerNode *node_;
     QHash<QString, DmWindow *> chats_;
     QHash<QString, ServerWindow *> rooms_;
+    CallEngine *call_;
+    CallWindow *callWindow_;
     QString networkStatus_;
     ContactCard *card_;
     QTimer *hoverTimer_;

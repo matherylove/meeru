@@ -2,6 +2,7 @@
 
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QFileDialog>
 #include <QDir>
 #include <QFile>

@@ -32,6 +32,7 @@
 #include "contact_card.h"
 #include "dm_window.h"
 #include "server_window.h"
+#include "call_window.h"
 #include "firewall_helper.h"
 #include "meeru_dialogs.h"
 #include "meeru_paint.h"
@@ -269,7 +270,7 @@ MainWindow::MainWindow(const LocalProfile &profile, const MeeruPaths &paths, QWi
       titleBar_(0), banner_(0), avatar_(0), nameLabel_(0), presenceDot_(0), stateLabel_(0), statusLabel_(0),
       statusEdit_(0), statusStack_(0), search_(0), tabs_(0), addButton_(0),
       list_(0), emptyLabel_(0), listStack_(0), newsLabel_(0), footerLabel_(0),
-      messages_(0), node_(0), card_(0), hoverTimer_(0)
+      messages_(0), node_(0), call_(0), callWindow_(0), card_(0), hoverTimer_(0)
 {
     messages_ = new MessageStore(paths_, profile.identityId, this);
 
@@ -1139,6 +1140,8 @@ DmWindow *MainWindow::openDirectMessage(const QString &peerId)
     window->setWindowIcon(windowIcon());
     window->setPeerOnline(node_ && node_->isOnline(peerId));
     connect(window, SIGNAL(closed(QString)), this, SLOT(onDmClosed(QString)));
+    connect(window, SIGNAL(callRequested(QString,QStringList,QString,bool)),
+            this, SLOT(beginCall(QString,QStringList,QString,bool)));
     chats_.insert(peerId, window);
 
     window->show();
@@ -1175,6 +1178,8 @@ ServerWindow *MainWindow::openGroup(const QString &conversationId)
                                             messages_, node_, this);
     window->setWindowIcon(windowIcon());
     connect(window, SIGNAL(closed(QString)), this, SLOT(onRoomClosed(QString)));
+    connect(window, SIGNAL(callRequested(QString,QStringList,QString,bool)),
+            this, SLOT(beginCall(QString,QStringList,QString,bool)));
     rooms_.insert(conversationId, window);
     window->show();
     window->followAnchor();
@@ -1205,10 +1210,107 @@ ServerWindow *MainWindow::openServerWindow(const QString &serverId)
     ServerWindow *window = new ServerWindow(profile_, server, paths_, messages_, node_, this);
     window->setWindowIcon(windowIcon());
     connect(window, SIGNAL(closed(QString)), this, SLOT(onRoomClosed(QString)));
+    connect(window, SIGNAL(callRequested(QString,QStringList,QString,bool)),
+            this, SLOT(beginCall(QString,QStringList,QString,bool)));
     rooms_.insert(serverId, window);
     window->show();
     window->followAnchor();
     return window;
+}
+
+void MainWindow::beginCall(const QString &conversationId, const QStringList &participants,
+                           const QString &title, bool withVideo)
+{
+    if (!call_ || !node_)
+        return;
+
+    if (!CallEngine::audioAvailable()) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Call"),
+                                 QString::fromLatin1("This build of Meeru has no audio support, so "
+                                                     "calls cannot be made from here. Screen sharing "
+                                                     "needs a call to travel in."));
+        return;
+    }
+
+    QStringList online;
+    for (int i = 0; i < participants.size(); ++i) {
+        if (node_->isOnline(participants.at(i)))
+            online.append(participants.at(i));
+    }
+    if (online.isEmpty()) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Call"),
+                                 QString::fromLatin1("Nobody there is connected right now. A call "
+                                                     "needs both sides online at the same time."));
+        return;
+    }
+
+    call_->startCall(conversationId, online, withVideo);
+
+    if (!callWindow_) {
+        callWindow_ = new CallWindow(profile_, title, call_, this);
+        callWindow_->setWindowIcon(windowIcon());
+        connect(callWindow_, SIGNAL(closed()), this, SLOT(onCallWindowClosed()));
+    }
+
+    QHash<QString, QString> names;
+    for (int i = 0; i < online.size(); ++i)
+        names.insert(online.at(i), roster_.contact(online.at(i)).bestName());
+    callWindow_->setPeerNames(names);
+    callWindow_->show();
+    callWindow_->followAnchor();
+}
+
+void MainWindow::onCallSignal(const QString &peerId, const QString &conversationId,
+                              const QString &kind, bool withVideo)
+{
+    if (!call_)
+        return;
+
+    if (kind == QLatin1String("offer")) {
+        const QString who = roster_.contact(peerId).bestName();
+        if (!MeeruDialog::confirm(this, QString::fromLatin1("Incoming call"),
+                                  QString::fromLatin1("%1 is calling.").arg(who),
+                                  QString::fromLatin1("Answer"))) {
+            QStringList one;
+            one.append(peerId);
+            call_->incomingCall(conversationId, peerId, withVideo);
+            call_->hangUp();
+            return;
+        }
+
+        call_->incomingCall(conversationId, peerId, withVideo);
+        call_->answer(withVideo);
+
+        if (!callWindow_) {
+            callWindow_ = new CallWindow(profile_, who, call_, this);
+            callWindow_->setWindowIcon(windowIcon());
+            connect(callWindow_, SIGNAL(closed()), this, SLOT(onCallWindowClosed()));
+        }
+        QHash<QString, QString> names;
+        names.insert(peerId, who);
+        callWindow_->setPeerNames(names);
+        callWindow_->show();
+        callWindow_->followAnchor();
+        return;
+    }
+
+    if (kind == QLatin1String("answer")) {
+        call_->answer(withVideo);
+        return;
+    }
+
+    if (kind == QLatin1String("end") || kind == QLatin1String("busy")) {
+        call_->peerLeft(peerId);
+        return;
+    }
+}
+
+void MainWindow::onCallWindowClosed()
+{
+    if (callWindow_) {
+        callWindow_->deleteLater();
+        callWindow_ = 0;
+    }
 }
 
 void MainWindow::onRoomClosed(const QString &roomId)
@@ -1549,6 +1651,11 @@ void MainWindow::startNetwork()
     connect(node_, SIGNAL(messageDelivered(QString,QString)),
             this, SLOT(onMessageDelivered(QString,QString)));
     node_->setMessageStore(messages_);
+
+    call_ = new CallEngine(this);
+    node_->setCallEngine(call_);
+    connect(node_, SIGNAL(callSignal(QString,QString,QString,bool)),
+            this, SLOT(onCallSignal(QString,QString,QString,bool)));
 
     const AppSettings network = settings_.load();
     node_->setNetworkPreferences(network.listenPort, network.publicAddress, network.useUpnp);

@@ -69,6 +69,8 @@ public:
 
 signals:
     void closed(const QString &peerId);
+    void callRequested(const QString &conversationId, const QStringList &participants,
+                       const QString &title, bool withVideo);
 
 protected:
     void closeEvent(QCloseEvent *event);
@@ -81,6 +83,8 @@ private slots:
     void onHistoryLink(const QUrl &url);
     void onTransferChanged(const QString &conversationId, const QString &messageId);
     void onVoice();
+    void onCall();
+    void onVideoCall();
     void onVoiceTick(int seconds);
     void onPinToggled(bool pinned);
     void onComposeChanged(const QString &text);

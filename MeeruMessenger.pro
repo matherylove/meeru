@@ -32,6 +32,8 @@ SOURCES += \
     src/message_store.cpp \
     src/server_model.cpp \
     src/server_window.cpp \
+    src/call_engine.cpp \
+    src/call_window.cpp \
     src/media_window.cpp \
     src/dm_window.cpp \
     src/roster.cpp \
@@ -64,6 +66,8 @@ HEADERS += \
     src/message_store.h \
     src/server_model.h \
     src/server_window.h \
+    src/call_engine.h \
+    src/call_window.h \
     src/media_window.h \
     src/dm_window.h \
     src/roster.h \
