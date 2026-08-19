@@ -335,6 +335,48 @@ void MeeruDialog::showMessage(QWidget *parent, const QString &title, const QStri
     dialog.exec();
 }
 
+bool MeeruDialog::promptText(QWidget *parent, const QString &title, const QString &caption,
+                             QString *value)
+{
+    if (!value)
+        return false;
+
+    MeeruDialog dialog(title, parent);
+    dialog.setDialogWidth(340);
+
+    QLabel *label = new QLabel(caption);
+    label->setObjectName(QString::fromLatin1("dialogLabel"));
+    label->setWordWrap(true);
+    dialog.contentLayout()->addWidget(label);
+
+    QLineEdit *edit = new QLineEdit();
+    edit->setFixedHeight(30);
+    edit->setText(*value);
+    dialog.contentLayout()->addWidget(edit);
+
+    QHBoxLayout *buttons = new QHBoxLayout();
+    buttons->addStretch();
+    QPushButton *cancel = new QPushButton(QString::fromLatin1("Cancel"));
+    QPushButton *accept = new QPushButton(QString::fromLatin1("Save"));
+    accept->setObjectName(QString::fromLatin1("primaryButton"));
+    accept->setDefault(true);
+    buttons->addWidget(cancel);
+    buttons->addWidget(accept);
+    dialog.contentLayout()->addLayout(buttons);
+
+    QObject::connect(cancel, SIGNAL(clicked()), &dialog, SLOT(reject()));
+    QObject::connect(accept, SIGNAL(clicked()), &dialog, SLOT(accept()));
+    QObject::connect(edit, SIGNAL(returnPressed()), &dialog, SLOT(accept()));
+
+    edit->setFocus();
+    edit->selectAll();
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    *value = edit->text().trimmed();
+    return !value->isEmpty();
+}
+
 bool MeeruDialog::confirm(QWidget *parent, const QString &title, const QString &message, const QString &acceptText)
 {
     MeeruDialog dialog(title, parent);

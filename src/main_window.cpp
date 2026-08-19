@@ -1180,6 +1180,8 @@ ServerWindow *MainWindow::openGroup(const QString &conversationId)
     connect(window, SIGNAL(closed(QString)), this, SLOT(onRoomClosed(QString)));
     connect(window, SIGNAL(callRequested(QString,QStringList,QString,bool)),
             this, SLOT(beginCall(QString,QStringList,QString,bool)));
+    connect(window, SIGNAL(memberActionRequested(QString,QString)),
+            this, SLOT(onMemberAction(QString,QString)));
     rooms_.insert(conversationId, window);
     window->show();
     window->followAnchor();
@@ -1212,6 +1214,8 @@ ServerWindow *MainWindow::openServerWindow(const QString &serverId)
     connect(window, SIGNAL(closed(QString)), this, SLOT(onRoomClosed(QString)));
     connect(window, SIGNAL(callRequested(QString,QStringList,QString,bool)),
             this, SLOT(beginCall(QString,QStringList,QString,bool)));
+    connect(window, SIGNAL(memberActionRequested(QString,QString)),
+            this, SLOT(onMemberAction(QString,QString)));
     rooms_.insert(serverId, window);
     window->show();
     window->followAnchor();
@@ -1310,6 +1314,33 @@ void MainWindow::onCallWindowClosed()
     if (callWindow_) {
         callWindow_->deleteLater();
         callWindow_ = 0;
+    }
+}
+
+void MainWindow::onMemberAction(const QString &identityId, const QString &action)
+{
+    if (action == QLatin1String("message")) {
+        openDirectMessage(identityId);
+        return;
+    }
+
+    if (action == QLatin1String("befriend")) {
+        if (roster_.hasContact(identityId)) {
+            MeeruDialog::showMessage(this, QString::fromLatin1("Add a contact"),
+                                     QString::fromLatin1("They are already in your contacts."));
+            return;
+        }
+        Roster::Contact contact;
+        contact.id = identityId;
+        contact.state = Roster::ContactPendingOutgoing;
+        contact.addedAtUtc = QDateTime::currentDateTimeUtc();
+        if (roster_.addContact(contact, 0) && node_ && node_->isRunning()) {
+            node_->setContacts(roster_.contacts());
+            node_->requestContact(identityId, QString(),
+                                  QString::fromLatin1("%1 would like to add you on Meeru.")
+                                      .arg(profile_.displayName), 0);
+        }
+        refreshList();
     }
 }
 

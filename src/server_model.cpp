@@ -43,8 +43,73 @@ QString Server::Channel::conversationId(const QString &serverId) const
     return serverId + QLatin1Char('#') + id;
 }
 
+quint32 Server::defaultPermissions()
+{
+    return PermSendMessages | PermCreateThreads | PermEmbedLinks | PermAttachFiles
+         | PermMentionOthers | PermReadHistory | PermSendVoiceNotes | PermSendPolls
+         | PermVoiceConnect | PermVoiceSpeak | PermVoiceCamera | PermVoiceShareScreen
+         | PermUseSoundboard | PermChangeOwnNickname | PermCreateInvites;
+}
+
+QString Server::permissionName(quint32 flag)
+{
+    switch (flag) {
+    case PermAdministrator:     return QString::fromLatin1("Administrator");
+    case PermManageServer:      return QString::fromLatin1("Change the server");
+    case PermManageChannels:    return QString::fromLatin1("Manage channels");
+    case PermManageRoles:       return QString::fromLatin1("Manage lower roles");
+    case PermManageEmoji:       return QString::fromLatin1("Manage emoji");
+    case PermManageSounds:      return QString::fromLatin1("Manage sounds");
+    case PermViewAudit:         return QString::fromLatin1("Read the audit log");
+    case PermViewInvites:       return QString::fromLatin1("See invites");
+    case PermCreateInvites:     return QString::fromLatin1("Create invites");
+    case PermChangeOwnNickname: return QString::fromLatin1("Change own nickname here");
+    case PermManageNicknames:   return QString::fromLatin1("Change other nicknames");
+    case PermApproveMembers:    return QString::fromLatin1("Approve or refuse members");
+    case PermKickMembers:       return QString::fromLatin1("Remove members");
+    case PermBanMembers:        return QString::fromLatin1("Ban members");
+    case PermSuspendMembers:    return QString::fromLatin1("Suspend members");
+    case PermSendMessages:      return QString::fromLatin1("Write messages");
+    case PermCreateThreads:     return QString::fromLatin1("Start threads");
+    case PermEmbedLinks:        return QString::fromLatin1("Post links");
+    case PermAttachFiles:       return QString::fromLatin1("Attach files");
+    case PermMentionOthers:     return QString::fromLatin1("Mention people");
+    case PermDeleteMessages:    return QString::fromLatin1("Delete messages");
+    case PermPinMessages:       return QString::fromLatin1("Pin messages");
+    case PermReadHistory:       return QString::fromLatin1("Read past messages");
+    case PermSendVoiceNotes:    return QString::fromLatin1("Send voice notes");
+    case PermSendPolls:         return QString::fromLatin1("Send polls");
+    case PermVoiceConnect:      return QString::fromLatin1("Join voice channels");
+    case PermVoiceSpeak:        return QString::fromLatin1("Speak in voice");
+    case PermVoiceCamera:       return QString::fromLatin1("Turn on a camera");
+    case PermVoiceShareScreen:  return QString::fromLatin1("Share a screen");
+    case PermUseSoundboard:     return QString::fromLatin1("Use the sound panel");
+    case PermMuteOthers:        return QString::fromLatin1("Mute or deafen others");
+    case PermMoveOthers:        return QString::fromLatin1("Move others between channels");
+    default:                    return QString();
+    }
+}
+
+QList<quint32> Server::allPermissions()
+{
+    QList<quint32> flags;
+    for (int bit = 0; bit < 32; ++bit) {
+        const quint32 flag = 1u << bit;
+        if (!permissionName(flag).isEmpty())
+            flags.append(flag);
+    }
+    return flags;
+}
+
+bool Server::Invite::isExpired(const QDateTime &now) const
+{
+    if (maxUses > 0 && uses >= maxUses)
+        return true;
+    return expiresAtUtc.isValid() && now > expiresAtUtc;
+}
+
 Server::Role::Role()
-    : rank(0), canManage(false)
+    : rank(0), canManage(false), permissions(Server::defaultPermissions())
 {
 }
 
@@ -73,6 +138,40 @@ bool ServerModel::load()
     const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
     name_ = root.value("name").toString();
     topic_ = root.value("topic").toString();
+    description_ = root.value("description").toString();
+    haloColour_ = root.value("haloColour").toString();
+
+    invites_.clear();
+    const QJsonArray invites = root.value("invites").toArray();
+    for (int i = 0; i < invites.size(); ++i) {
+        const QJsonObject object = invites.at(i).toObject();
+        Server::Invite invite;
+        invite.code = object.value("code").toString();
+        invite.createdBy = object.value("createdBy").toString();
+        invite.grantsRoleId = object.value("grantsRoleId").toString();
+        invite.createdAtUtc = QDateTime::fromString(object.value("createdAtUtc").toString(), Qt::ISODate);
+        invite.expiresAtUtc = QDateTime::fromString(object.value("expiresAtUtc").toString(), Qt::ISODate);
+        invite.uses = object.value("uses").toInt();
+        invite.maxUses = object.value("maxUses").toInt();
+        const QJsonArray joined = object.value("joinedIdentities").toArray();
+        for (int j = 0; j < joined.size(); ++j)
+            invite.joinedIdentities.append(joined.at(j).toString());
+        if (!invite.code.isEmpty())
+            invites_.append(invite);
+    }
+
+    sounds_.clear();
+    const QJsonArray sounds = root.value("sounds").toArray();
+    for (int i = 0; i < sounds.size(); ++i) {
+        const QJsonObject object = sounds.at(i).toObject();
+        Server::Sound sound;
+        sound.id = object.value("id").toString();
+        sound.name = object.value("name").toString();
+        sound.filePath = object.value("filePath").toString();
+        sound.addedBy = object.value("addedBy").toString();
+        if (!sound.id.isEmpty())
+            sounds_.append(sound);
+    }
 
     categories_.clear();
     const QJsonArray categories = root.value("categories").toArray();
@@ -113,6 +212,7 @@ bool ServerModel::load()
         role.colour = object.value("colour").toString();
         role.rank = object.value("rank").toInt();
         role.canManage = object.value("canManage").toBool(false);
+        role.permissions = static_cast<quint32>(object.value("permissions").toDouble(Server::defaultPermissions()));
         if (role.isValid())
             roles_.append(role);
     }
@@ -126,6 +226,13 @@ bool ServerModel::load()
         member.displayName = object.value("displayName").toString();
         member.roleId = object.value("roleId").toString();
         member.joinedAtUtc = QDateTime::fromString(object.value("joinedAtUtc").toString(), Qt::ISODate);
+        member.nickname = object.value("nickname").toString();
+        member.accountCreatedUtc = QDateTime::fromString(object.value("accountCreatedUtc").toString(), Qt::ISODate);
+        member.joinedWithInvite = object.value("joinedWithInvite").toString();
+        member.suspended = object.value("suspended").toBool(false);
+        const QJsonArray held = object.value("roleIds").toArray();
+        for (int j = 0; j < held.size(); ++j)
+            member.roleIds.append(held.at(j).toString());
         if (!member.identityId.isEmpty())
             members_.append(member);
     }
@@ -185,6 +292,7 @@ bool ServerModel::save(QString *error) const
         object.insert("colour", role.colour);
         object.insert("rank", role.rank);
         object.insert("canManage", role.canManage);
+        object.insert("permissions", static_cast<double>(role.permissions));
         roles.append(object);
     }
 
@@ -196,6 +304,14 @@ bool ServerModel::save(QString *error) const
         object.insert("displayName", member.displayName);
         object.insert("roleId", member.roleId);
         object.insert("joinedAtUtc", isoOrEmpty(member.joinedAtUtc));
+        object.insert("nickname", member.nickname);
+        object.insert("accountCreatedUtc", isoOrEmpty(member.accountCreatedUtc));
+        object.insert("joinedWithInvite", member.joinedWithInvite);
+        object.insert("suspended", member.suspended);
+        QJsonArray held;
+        for (int j = 0; j < member.roleIds.size(); ++j)
+            held.append(member.roleIds.at(j));
+        object.insert("roleIds", held);
         members.append(object);
     }
 
@@ -213,6 +329,38 @@ bool ServerModel::save(QString *error) const
     root.insert("formatVersion", 1);
     root.insert("name", name_);
     root.insert("topic", topic_);
+    root.insert("description", description_);
+    root.insert("haloColour", haloColour_);
+
+    QJsonArray invites;
+    for (int i = 0; i < invites_.size(); ++i) {
+        const Server::Invite &invite = invites_.at(i);
+        QJsonObject object;
+        object.insert("code", invite.code);
+        object.insert("createdBy", invite.createdBy);
+        object.insert("grantsRoleId", invite.grantsRoleId);
+        object.insert("createdAtUtc", isoOrEmpty(invite.createdAtUtc));
+        object.insert("expiresAtUtc", isoOrEmpty(invite.expiresAtUtc));
+        object.insert("uses", invite.uses);
+        object.insert("maxUses", invite.maxUses);
+        QJsonArray joined;
+        for (int j = 0; j < invite.joinedIdentities.size(); ++j)
+            joined.append(invite.joinedIdentities.at(j));
+        object.insert("joinedIdentities", joined);
+        invites.append(object);
+    }
+    root.insert("invites", invites);
+
+    QJsonArray sounds;
+    for (int i = 0; i < sounds_.size(); ++i) {
+        QJsonObject object;
+        object.insert("id", sounds_.at(i).id);
+        object.insert("name", sounds_.at(i).name);
+        object.insert("filePath", sounds_.at(i).filePath);
+        object.insert("addedBy", sounds_.at(i).addedBy);
+        sounds.append(object);
+    }
+    root.insert("sounds", sounds);
     root.insert("categories", categories);
     root.insert("channels", channels);
     root.insert("roles", roles);
@@ -278,6 +426,82 @@ Server::Role ServerModel::role(const QString &roleId) const
             return roles_.at(i);
     }
     return Server::Role();
+}
+
+quint32 ServerModel::permissionsFor(const QString &identityId) const
+{
+    quint32 allowed = 0;
+    for (int i = 0; i < members_.size(); ++i) {
+        if (members_.at(i).identityId != identityId)
+            continue;
+
+        QStringList held = members_.at(i).roleIds;
+        if (held.isEmpty() && !members_.at(i).roleId.isEmpty())
+            held.append(members_.at(i).roleId);
+
+        for (int j = 0; j < held.size(); ++j) {
+            const Server::Role entry = role(held.at(j));
+            if (entry.permissions & Server::PermAdministrator)
+                return 0xFFFFFFFFu;   // an administrator is not asked twice
+            allowed |= entry.permissions;
+        }
+        return allowed;
+    }
+    return 0;
+}
+
+bool ServerModel::may(const QString &identityId, quint32 permission) const
+{
+    return (permissionsFor(identityId) & permission) != 0;
+}
+
+int ServerModel::highestRank(const QString &identityId) const
+{
+    int best = -1;
+    for (int i = 0; i < members_.size(); ++i) {
+        if (members_.at(i).identityId != identityId)
+            continue;
+        QStringList held = members_.at(i).roleIds;
+        if (held.isEmpty() && !members_.at(i).roleId.isEmpty())
+            held.append(members_.at(i).roleId);
+        for (int j = 0; j < held.size(); ++j)
+            best = qMax(best, role(held.at(j)).rank);
+    }
+    return best;
+}
+
+void ServerModel::addInvite(const Server::Invite &invite)
+{
+    Server::Invite entry = invite;
+    if (entry.code.isEmpty())
+        entry.code = newId();
+    if (!entry.createdAtUtc.isValid())
+        entry.createdAtUtc = QDateTime::currentDateTimeUtc();
+    invites_.append(entry);
+}
+
+void ServerModel::removeInvite(const QString &code)
+{
+    for (int i = invites_.size() - 1; i >= 0; --i) {
+        if (invites_.at(i).code == code)
+            invites_.removeAt(i);
+    }
+}
+
+void ServerModel::addSound(const Server::Sound &sound)
+{
+    Server::Sound entry = sound;
+    if (entry.id.isEmpty())
+        entry.id = newId();
+    sounds_.append(entry);
+}
+
+void ServerModel::removeSound(const QString &soundId)
+{
+    for (int i = sounds_.size() - 1; i >= 0; --i) {
+        if (sounds_.at(i).id == soundId)
+            sounds_.removeAt(i);
+    }
 }
 
 QList<Server::Member> ServerModel::membersByRank() const
@@ -353,6 +577,26 @@ void ServerModel::setMemberRole(const QString &identityId, const QString &roleId
     }
 }
 
+void ServerModel::setMemberNickname(const QString &identityId, const QString &nickname)
+{
+    for (int i = 0; i < members_.size(); ++i) {
+        if (members_.at(i).identityId == identityId) {
+            members_[i].nickname = nickname;
+            return;
+        }
+    }
+}
+
+void ServerModel::setMemberSuspended(const QString &identityId, bool suspended)
+{
+    for (int i = 0; i < members_.size(); ++i) {
+        if (members_.at(i).identityId == identityId) {
+            members_[i].suspended = suspended;
+            return;
+        }
+    }
+}
+
 void ServerModel::addMember(const Server::Member &member)
 {
     for (int i = 0; i < members_.size(); ++i) {
@@ -389,6 +633,8 @@ ServerModel ServerModel::createDefault(const MeeruPaths &paths, const QString &i
     ServerModel model(paths, identityId, serverId);
     model.name_ = name;
     model.topic_ = topic;
+    model.description_ = topic;
+    model.haloColour_ = QString::fromLatin1("#DFB2F4");
 
     Server::Role owner;
     owner.id = newId();
@@ -396,6 +642,7 @@ ServerModel ServerModel::createDefault(const MeeruPaths &paths, const QString &i
     owner.colour = QString::fromLatin1("#F49097");
     owner.rank = 100;
     owner.canManage = true;
+    owner.permissions = Server::PermAdministrator;
     model.roles_.append(owner);
 
     Server::Role member;
@@ -403,6 +650,7 @@ ServerModel ServerModel::createDefault(const MeeruPaths &paths, const QString &i
     member.name = QString::fromLatin1("Member");
     member.colour = QString::fromLatin1("#DFB2F4");
     member.rank = 10;
+    member.permissions = Server::defaultPermissions();
     model.roles_.append(member);
 
     Server::Category general;
@@ -431,6 +679,8 @@ ServerModel ServerModel::createDefault(const MeeruPaths &paths, const QString &i
     self.identityId = identityId;
     self.displayName = ownerName;
     self.roleId = owner.id;
+    self.roleIds.append(owner.id);
+    self.accountCreatedUtc = QDateTime::currentDateTimeUtc();
     self.joinedAtUtc = QDateTime::currentDateTimeUtc();
     model.members_.append(self);
 

@@ -3,6 +3,7 @@
 
 #include <QHash>
 #include <QString>
+#include <QPoint>
 #include <QWidget>
 
 #include "identity_store.h"
@@ -75,6 +76,7 @@ signals:
     void closed(const QString &serverId);
     void callRequested(const QString &conversationId, const QStringList &participants,
                        const QString &title, bool withVideo);
+    void memberActionRequested(const QString &identityId, const QString &action);
 
 protected:
     void closeEvent(QCloseEvent *event);
@@ -88,6 +90,11 @@ private slots:
     void onHistoryLink(const QUrl &url);
     void onPinToggled(bool pinned);
     void onAdultToggled(bool allowed);
+    void onChannelMenu(const QPoint &where);
+    void onMemberMenu(const QPoint &where);
+    void onEmoji();
+    void onVoiceNote();
+    void onPlus();
 
 private:
     void buildUi();
@@ -105,6 +112,7 @@ private:
     void fillSettings();
 
     void showChat(const QString &channelId);
+    void sendAttachment(const QString &path);
     void showGallery();
     void showFiltered(int mediaKind, bool linksOnly);
     void showAnchoredHistory(const QString &channelId, const QString &messageId);
@@ -146,6 +154,8 @@ private:
     QStackedWidget *contentStack_;
     QLineEdit *compose_;
     QWidget *composeWrap_;
+    class VoiceRecorder *voice_;
+    class QPushButton *voiceButton_;
     QHash<QString, MediaWindow *> viewers_;
 };
 

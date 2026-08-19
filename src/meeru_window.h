@@ -112,6 +112,10 @@ public:
     void setDialogWidth(int width);
 
     static void showMessage(QWidget *parent, const QString &title, const QString &message);
+    // Asks for one short line of text. Returns false if the person backed out.
+    static bool promptText(QWidget *parent, const QString &title, const QString &caption,
+                           QString *value);
+
     static bool confirm(QWidget *parent, const QString &title, const QString &message,
                         const QString &acceptText = QString::fromLatin1("Continue"));
 

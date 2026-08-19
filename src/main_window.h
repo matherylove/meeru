@@ -85,6 +85,7 @@ private slots:
     void onMessageDelivered(const QString &conversationId, const QString &messageId);
     void onDmClosed(const QString &peerId);
     void onRoomClosed(const QString &roomId);
+    void onMemberAction(const QString &identityId, const QString &action);
     void onCallSignal(const QString &peerId, const QString &conversationId,
                       const QString &kind, bool withVideo);
     void onCallWindowClosed();

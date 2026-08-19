@@ -17,7 +17,17 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <QAction>
+#include <QCursor>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QMenu>
+
 #include "app_settings.h"
+#include "camera_source.h"
+#include "transfer_manager.h"
+#include "voice_recorder.h"
 #include "avatar.h"
 #include "media_window.h"
 #include "meeru_dialogs.h"
@@ -31,7 +41,6 @@ namespace {
 
 const int kWindowWidth = 720;
 const int kWindowHeight = 560;
-const int kRailWidth = 104;
 const int kSideWidth = 210;
 const int kDockGap = 6;
 
@@ -75,7 +84,8 @@ ServerWindow::ServerWindow(const LocalProfile &profile,
       group_(false), pinned_(true), adultAllowed_(false), section_(SectionMembers),
       mediaKind_(Chat::MediaImage),
       titleBar_(0), rail_(0), side_(0), sideTitle_(0), scopeBox_(0),
-      content_(0), gallery_(0), contentStack_(0), compose_(0), composeWrap_(0)
+      content_(0), gallery_(0), contentStack_(0), compose_(0), composeWrap_(0),
+      voice_(0), voiceButton_(0)
 {
     if (!model_.load()) {
         model_ = ServerModel::createDefault(paths_, profile_.identityId, server.id,
@@ -108,7 +118,8 @@ ServerWindow::ServerWindow(const LocalProfile &profile,
       contacts_(members), group_(true), pinned_(true), adultAllowed_(false),
       section_(SectionMembers), mediaKind_(Chat::MediaImage),
       titleBar_(0), rail_(0), side_(0), sideTitle_(0), scopeBox_(0),
-      content_(0), gallery_(0), contentStack_(0), compose_(0), composeWrap_(0)
+      content_(0), gallery_(0), contentStack_(0), compose_(0), composeWrap_(0),
+      voice_(0), voiceButton_(0)
 {
     if (!model_.load()) {
         QString title = group.title.trimmed();
@@ -137,7 +148,7 @@ void ServerWindow::buildUi()
     setWindowTitle(model_.name());
     setStyleSheet(MeeruStyle::sheet());
     resize(kWindowWidth, kWindowHeight);
-    setMinimumSize(620, 460);
+    setMinimumSize(640, 470);
 
     QVBoxLayout *outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -186,42 +197,42 @@ void ServerWindow::buildUi()
     heroLayout->addWidget(heroText, 1, Qt::AlignVCenter);
     layout->addWidget(hero_);
 
-    QHBoxLayout *body = new QHBoxLayout();
-    body->setContentsMargins(0, 0, 0, 0);
-    body->setSpacing(0);
+    // --- the sections, as a row of tabs like the main window uses
+    QWidget *tabStrip = new QWidget(root);
+    tabStrip->setObjectName(QString::fromLatin1("serverTabs"));
+    tabStrip->setAttribute(Qt::WA_StyledBackground, true);
+    tabStrip->setFixedHeight(34);
 
-    // --- the rail of sections
-    QWidget *rail = new QWidget(root);
-    rail->setObjectName(QString::fromLatin1("serverRail"));
-    rail->setAttribute(Qt::WA_StyledBackground, true);
-    rail->setFixedWidth(kRailWidth);
-
-    QVBoxLayout *railLayout = new QVBoxLayout(rail);
-    railLayout->setContentsMargins(6, 8, 6, 8);
-    railLayout->setSpacing(2);
+    QHBoxLayout *tabLayout = new QHBoxLayout(tabStrip);
+    tabLayout->setContentsMargins(12, 0, 12, 0);
+    tabLayout->setSpacing(2);
 
     rail_ = new QButtonGroup(this);
     rail_->setExclusive(true);
     for (int i = 0; i < 9; ++i) {
         const SectionInfo &info = kSections[i];
         if (group_ && (info.id == SectionChannels || info.id == SectionThreads))
-            continue;   // a group has neither
+            continue;
 
-        QPushButton *button = new QPushButton(QString::fromLatin1(info.label), rail);
-        button->setObjectName(QString::fromLatin1("railButton"));
+        QPushButton *button = new QPushButton(QString::fromLatin1(info.label), tabStrip);
+        button->setObjectName(QString::fromLatin1("serverTab"));
         button->setCheckable(true);
         button->setFlat(true);
         button->setCursor(Qt::PointingHandCursor);
         button->setFocusPolicy(Qt::NoFocus);
-        button->setFixedHeight(28);
+        button->setFixedHeight(30);
         if (info.id == SectionMembers)
             button->setChecked(true);
         rail_->addButton(button, info.id);
-        railLayout->addWidget(button);
+        tabLayout->addWidget(button);
     }
-    railLayout->addStretch();
-    body->addWidget(rail);
+    tabLayout->addStretch();
+    layout->addWidget(tabStrip);
     connect(rail_, SIGNAL(buttonClicked(int)), this, SLOT(onSectionChanged(int)));
+
+    QHBoxLayout *body = new QHBoxLayout();
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(0);
 
     // --- the panel that changes with the section
     QWidget *sidePane = new QWidget(root);
@@ -241,12 +252,14 @@ void ServerWindow::buildUi()
     side_->setFrameShape(QFrame::NoFrame);
     side_->setStyleSheet(QString::fromLatin1(
         "QListWidget { background: transparent; border: 0; }"
-        "QListWidget::item { padding: 5px 6px; border-radius: 4px; color: #E4D6EA; }"
-        "QListWidget::item:hover { background: #35264048; }"
+        "QListWidget::item { padding: 4px 6px; border-radius: 5px; color: #E4D6EA; }"
+        "QListWidget::item:hover { background: #2f2139; }"
         "QListWidget::item:selected { background: #4a3454; color: #ffffff; }"));
     sideLayout->addWidget(side_, 1);
     body->addWidget(sidePane);
+    side_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(side_, SIGNAL(itemSelectionChanged()), this, SLOT(onSideChoice()));
+    connect(side_, SIGNAL(customContextMenuRequested(QPoint)), this, SLOT(onChannelMenu(QPoint)));
 
     // --- the content
     QWidget *right = new QWidget(root);
@@ -304,7 +317,30 @@ void ServerWindow::buildUi()
     composeWrap_->setAttribute(Qt::WA_StyledBackground, true);
     QHBoxLayout *composeLayout = new QHBoxLayout(composeWrap_);
     composeLayout->setContentsMargins(10, 8, 10, 8);
-    composeLayout->setSpacing(8);
+    composeLayout->setSpacing(6);
+
+    QPushButton *plus = new QPushButton(QString::fromLatin1("+"), composeWrap_);
+    plus->setObjectName(QString::fromLatin1("glassButton"));
+    plus->setFixedSize(28, 28);
+    plus->setToolTip(QString::fromLatin1("Attach, start a thread or a poll"));
+
+    QPushButton *emoji = new QPushButton(QString::fromUtf8("\342\230\272"), composeWrap_);
+    emoji->setObjectName(QString::fromLatin1("glassButton"));
+    emoji->setFixedSize(28, 28);
+    emoji->setToolTip(QString::fromLatin1("Emoji"));
+
+    voiceButton_ = new QPushButton(QString::fromUtf8("\342\231\252"), composeWrap_);
+    voiceButton_->setObjectName(QString::fromLatin1("glassButton"));
+    voiceButton_->setFixedSize(28, 28);
+    voiceButton_->setToolTip(QString::fromLatin1("Record a voice note"));
+
+    composeLayout->addWidget(plus);
+    composeLayout->addWidget(emoji);
+    composeLayout->addWidget(voiceButton_);
+
+    connect(plus, SIGNAL(clicked()), this, SLOT(onPlus()));
+    connect(emoji, SIGNAL(clicked()), this, SLOT(onEmoji()));
+    connect(voiceButton_, SIGNAL(clicked()), this, SLOT(onVoiceNote()));
 
     compose_ = new QLineEdit(composeWrap_);
     compose_->setObjectName(QString::fromLatin1("dmCompose"));
@@ -367,34 +403,63 @@ void ServerWindow::fillMembers()
         const Server::Member &member = members.at(i);
         const Server::Role role = model_.role(member.roleId);
 
-        // Grouped under their role, highest first, the way Discord does it.
         if (role.name != lastRole) {
             QListWidgetItem *header = new QListWidgetItem(
                 (role.name.isEmpty() ? QString::fromLatin1("Members") : role.name).toUpper(), side_);
             header->setFlags(Qt::NoItemFlags);
             header->setForeground(QColor(0x9d, 0x8b, 0xa5));
+            header->setSizeHint(QSize(0, 22));
             lastRole = role.name;
         }
 
-        const bool online = node_ && node_->isOnline(member.identityId);
-        const int state = online ? Presence::Available : Presence::Invisible;
+        const bool self = member.identityId == profile_.identityId;
+        const bool online = self || (node_ && node_->isOnline(member.identityId));
+        const int state = online ? Presence::stateFromKey(profile_.presence) : Presence::Invisible;
 
-        QListWidgetItem *item = new QListWidgetItem(member.displayName, side_);
-        item->setData(Qt::UserRole, member.identityId);
+        // Drawn rather than listed: picture, halo in the colour of the state,
+        // name in the colour of the role, and what they are up to underneath.
+        QWidget *row = new QWidget(side_);
+        QHBoxLayout *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(2, 3, 2, 3);
+        rowLayout->setSpacing(9);
 
-        const QString directory = ImageStore::peerDirectory(paths_, profile_.identityId, member.identityId);
-        ImageStore avatar(directory, QString::fromLatin1("avatar"));
-        QPixmap tile;
-        if (avatar.hasImage())
-            tile = MeeruPaint::roundedFromPixmap(QPixmap(avatar.filePath()), QSize(22, 22), 5);
-        if (tile.isNull())
-            tile = MeeruPaint::initialsTile(MeeruPaint::initialsFor(member.displayName), QSize(22, 22), 5);
-        item->setIcon(QIcon(tile));
+        AvatarFrame *avatar = new AvatarFrame(row);
+        avatar->setTileSize(30);
+        avatar->setInitials(MeeruPaint::initialsFor(
+            member.nickname.isEmpty() ? member.displayName : member.nickname));
+        avatar->setPresenceColor(Presence::color(state), online);
 
+        const QString directory = ImageStore::peerDirectory(paths_, profile_.identityId,
+                                                            member.identityId);
+        ImageStore picture(directory, QString::fromLatin1("avatar"));
+        if (self)
+            picture = ImageStore(paths_, profile_.identityId, QString::fromLatin1("avatar"));
+        avatar->setImage(picture);
+        rowLayout->addWidget(avatar, 0, Qt::AlignVCenter);
+
+        QWidget *column = new QWidget(row);
+        QVBoxLayout *columnLayout = new QVBoxLayout(column);
+        columnLayout->setContentsMargins(0, 0, 0, 0);
+        columnLayout->setSpacing(1);
+
+        QLabel *name = new QLabel(member.nickname.isEmpty() ? member.displayName : member.nickname,
+                                  column);
+        name->setObjectName(QString::fromLatin1("memberName"));
         if (!role.colour.isEmpty())
-            item->setForeground(QColor(role.colour));
-        item->setToolTip(member.displayName + QString::fromLatin1("\n")
-                         + (online ? Presence::label(state) : QString::fromLatin1("Offline")));
+            name->setStyleSheet(QString::fromLatin1("color: %1;").arg(role.colour));
+
+        QLabel *status = new QLabel(online ? Presence::label(state)
+                                           : QString::fromLatin1("Offline"), column);
+        status->setObjectName(QString::fromLatin1("memberStatus"));
+
+        columnLayout->addWidget(name);
+        columnLayout->addWidget(status);
+        rowLayout->addWidget(column, 1);
+
+        QListWidgetItem *item = new QListWidgetItem(side_);
+        item->setData(Qt::UserRole, member.identityId);
+        item->setSizeHint(QSize(0, 44));
+        side_->setItemWidget(item, row);
     }
 }
 
@@ -951,6 +1016,271 @@ void ServerWindow::onSideChoice()
     }
 }
 
+void ServerWindow::onChannelMenu(const QPoint &where)
+{
+    QListWidgetItem *item = side_->itemAt(where);
+
+    if (section_ == SectionMembers) {
+        onMemberMenu(where);
+        return;
+    }
+    if (section_ != SectionChannels && section_ != SectionThreads)
+        return;
+
+    const bool mayManage = model_.may(profile_.identityId, Server::PermManageChannels);
+    const QString targetId = item ? item->data(Qt::UserRole).toString() : QString();
+
+    QMenu menu(this);
+    QAction *create = menu.addAction(QString::fromLatin1("New channel"));
+    QAction *edit = menu.addAction(QString::fromLatin1("Rename"));
+    QAction *duplicate = menu.addAction(QString::fromLatin1("Duplicate"));
+    QAction *mute = menu.addAction(QString::fromLatin1("Mute this channel"));
+    menu.addSeparator();
+    QAction *invite = menu.addAction(QString::fromLatin1("Invite somebody here"));
+    menu.addSeparator();
+    QAction *remove = menu.addAction(QString::fromLatin1("Delete"));
+
+    create->setEnabled(mayManage);
+    edit->setEnabled(mayManage && !targetId.isEmpty());
+    duplicate->setEnabled(mayManage && !targetId.isEmpty());
+    remove->setEnabled(mayManage && !targetId.isEmpty());
+    invite->setEnabled(model_.may(profile_.identityId, Server::PermCreateInvites));
+    mute->setEnabled(!targetId.isEmpty());
+
+    QAction *chosen = menu.exec(side_->viewport()->mapToGlobal(where));
+    if (!chosen)
+        return;
+
+    const Server::Channel target = model_.channel(targetId);
+
+    if (chosen == create) {
+        QString name = QString::fromLatin1("new-channel");
+        if (!MeeruDialog::promptText(this, QString::fromLatin1("New channel"),
+                                     QString::fromLatin1("What is it called?"), &name))
+            return;
+        Server::Channel channel;
+        channel.name = name;
+        channel.kind = Server::ChannelText;
+        channel.categoryId = target.categoryId;
+        model_.addChannel(channel);
+        model_.note(profile_.displayName, QString::fromLatin1("Created channel ") + name);
+    } else if (chosen == edit) {
+        QString name = target.name;
+        if (!MeeruDialog::promptText(this, QString::fromLatin1("Rename channel"),
+                                     QString::fromLatin1("New name"), &name))
+            return;
+        model_.removeChannel(targetId);
+        Server::Channel renamed = target;
+        renamed.name = name;
+        model_.addChannel(renamed);
+        model_.note(profile_.displayName, QString::fromLatin1("Renamed a channel to ") + name);
+    } else if (chosen == duplicate) {
+        Server::Channel copy = target;
+        copy.id.clear();
+        copy.name = target.name + QString::fromLatin1("-copy");
+        model_.addChannel(copy);
+        model_.note(profile_.displayName, QString::fromLatin1("Duplicated ") + target.name);
+    } else if (chosen == remove) {
+        if (!MeeruDialog::confirm(this, QString::fromLatin1("Delete channel"),
+                                  QString::fromLatin1("Delete %1? Everything written in it stays on "
+                                                      "the machines that already have it, but it "
+                                                      "disappears from this server.").arg(target.name),
+                                  QString::fromLatin1("Delete")))
+            return;
+        model_.removeChannel(targetId);
+        model_.note(profile_.displayName, QString::fromLatin1("Deleted ") + target.name);
+    } else if (chosen == mute) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Muted"),
+                                 QString::fromLatin1("%1 will not raise a notification.").arg(target.name));
+        return;
+    } else if (chosen == invite) {
+        Server::Invite entry;
+        entry.createdBy = profile_.displayName;
+        entry.expiresAtUtc = QDateTime::currentDateTimeUtc().addDays(7);
+        model_.addInvite(entry);
+        model_.save(0);
+        MeeruDialog::showMessage(this, QString::fromLatin1("Invite"),
+                                 QString::fromLatin1("Invite created. Find it under Settings, Invites."));
+        return;
+    }
+
+    model_.save(0);
+    rebuildSide();
+    rebuildContent();
+}
+
+void ServerWindow::onMemberMenu(const QPoint &where)
+{
+    QListWidgetItem *item = side_->itemAt(where);
+    if (!item)
+        return;
+    const QString identityId = item->data(Qt::UserRole).toString();
+    if (identityId.isEmpty() || identityId == profile_.identityId)
+        return;
+
+    QMenu menu(this);
+    QAction *dm = menu.addAction(QString::fromLatin1("Send a message"));
+    QAction *befriend = menu.addAction(QString::fromLatin1("Send a friend request"));
+    QAction *nickname = menu.addAction(QString::fromLatin1("Give them a nickname here"));
+    menu.addSeparator();
+    QAction *suspend = menu.addAction(QString::fromLatin1("Suspend"));
+    QAction *kick = menu.addAction(QString::fromLatin1("Remove from the server"));
+    QAction *ban = menu.addAction(QString::fromLatin1("Ban"));
+
+    // Each of these appears only where the role actually allows it.
+    suspend->setEnabled(model_.may(profile_.identityId, Server::PermSuspendMembers));
+    kick->setEnabled(model_.may(profile_.identityId, Server::PermKickMembers));
+    ban->setEnabled(model_.may(profile_.identityId, Server::PermBanMembers));
+    nickname->setEnabled(model_.may(profile_.identityId, Server::PermManageNicknames));
+
+    QAction *chosen = menu.exec(side_->viewport()->mapToGlobal(where));
+    if (!chosen)
+        return;
+
+    if (chosen == nickname) {
+        QString name;
+        if (!MeeruDialog::promptText(this, QString::fromLatin1("Nickname"),
+                                     QString::fromLatin1("Shown only inside this server"), &name))
+            return;
+        QList<Server::Member> members = model_.members();
+        for (int i = 0; i < members.size(); ++i) {
+            if (members.at(i).identityId == identityId) {
+                model_.setMemberNickname(identityId, name);
+                break;
+            }
+        }
+        model_.note(profile_.displayName, QString::fromLatin1("Set a nickname"));
+    } else if (chosen == kick || chosen == ban) {
+        model_.removeMember(identityId);
+        model_.note(profile_.displayName, chosen == ban ? QString::fromLatin1("Banned a member")
+                                                        : QString::fromLatin1("Removed a member"));
+    } else if (chosen == suspend) {
+        model_.setMemberSuspended(identityId, true);
+        model_.note(profile_.displayName, QString::fromLatin1("Suspended a member"));
+    } else if (chosen == dm || chosen == befriend) {
+        emit memberActionRequested(identityId, chosen == dm ? QString::fromLatin1("message")
+                                                            : QString::fromLatin1("befriend"));
+        return;
+    }
+
+    model_.save(0);
+    rebuildSide();
+}
+
+void ServerWindow::onEmoji()
+{
+    EmojiDialog dialog(paths_, profile_.identityId, this);
+    if (dialog.exec() == QDialog::Accepted && !dialog.chosen().isEmpty()) {
+        compose_->insert(QLatin1Char(':') + dialog.chosen() + QLatin1Char(':'));
+        compose_->setFocus();
+    }
+}
+
+void ServerWindow::onVoiceNote()
+{
+    if (!voice_) {
+        voice_ = new VoiceRecorder(this);
+    }
+
+    if (voice_->isRecording()) {
+        const QString finished = voice_->stop();
+        voiceButton_->setText(QString::fromUtf8("\342\231\252"));
+        if (!finished.isEmpty())
+            sendAttachment(finished);
+        return;
+    }
+
+    const QString directory = messages_ ? messages_->attachmentDirectory() : QString();
+    if (directory.isEmpty() || !QDir().mkpath(directory))
+        return;
+
+    QString error;
+    const QString target = directory + QLatin1String("/voice-")
+                         + QDateTime::currentDateTimeUtc().toString(QString::fromLatin1("yyyyMMdd-HHmmss"))
+                         + QLatin1String(".wav");
+    if (!voice_->start(target, &error)) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Voice note"), error);
+        return;
+    }
+    voiceButton_->setText(QString::fromUtf8("\342\226\240"));
+}
+
+void ServerWindow::onPlus()
+{
+    QMenu menu(this);
+    QAction *file = menu.addAction(QString::fromLatin1("Send a file"));
+    QAction *picture = menu.addAction(QString::fromLatin1("Send a picture or video"));
+    QAction *camera = menu.addAction(QString::fromLatin1("Take one with the camera"));
+    menu.addSeparator();
+    QAction *thread = menu.addAction(QString::fromLatin1("Start a thread"));
+    QAction *poll = menu.addAction(QString::fromLatin1("Create a poll"));
+
+    camera->setEnabled(CameraSource::isAvailable());
+    thread->setEnabled(!group_ && model_.may(profile_.identityId, Server::PermCreateThreads));
+    poll->setEnabled(model_.may(profile_.identityId, Server::PermSendPolls));
+
+    QAction *chosen = menu.exec(QCursor::pos());
+    if (!chosen)
+        return;
+
+    if (chosen == file || chosen == picture) {
+        const QString filter = chosen == picture
+            ? QString::fromLatin1("Pictures and video (*.png *.jpg *.jpeg *.gif *.bmp *.mp4 *.avi *.mkv)")
+            : QString::fromLatin1("All files (*)");
+        const QString path = QFileDialog::getOpenFileName(this, QString::fromLatin1("Send"),
+                                                          QDir::homePath(), filter);
+        if (!path.isEmpty())
+            sendAttachment(path);
+        return;
+    }
+
+    if (chosen == camera) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Camera"),
+                                 QString::fromLatin1("Taking a still from the camera arrives with the "
+                                                     "next update; the camera itself already works in "
+                                                     "calls."));
+        return;
+    }
+
+    if (chosen == thread) {
+        QString name = QString::fromLatin1("new thread");
+        if (!MeeruDialog::promptText(this, QString::fromLatin1("New thread"),
+                                     QString::fromLatin1("What is it about?"), &name))
+            return;
+        Server::Channel entry;
+        entry.name = name;
+        entry.kind = Server::ChannelThread;
+        entry.parentId = channelId_;
+        model_.addChannel(entry);
+        model_.note(profile_.displayName, QString::fromLatin1("Started thread ") + name);
+        model_.save(0);
+        rebuildSide();
+        return;
+    }
+
+    if (chosen == poll) {
+        PollDialog dialog(this);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        const Chat::Poll built = dialog.poll();
+        if (!built.isValid() || !messages_)
+            return;
+
+        Chat::Message message;
+        message.conversationId = currentConversationId();
+        message.kind = Chat::KindPoll;
+        message.delivery = Chat::DeliveryWaiting;
+        message.sentAtUtc = QDateTime::currentDateTimeUtc();
+        message.authorName = profile_.displayName;
+        message.text = built.question;
+        message.poll = built;
+
+        const Chat::Message stored = messages_->append(message);
+        if (stored.isValid())
+            showChat(channelId_);
+    }
+}
+
 void ServerWindow::onMediaFilter(int index)
 {
     Q_UNUSED(index);
@@ -962,6 +1292,47 @@ void ServerWindow::onChannelFilter(int index)
     Q_UNUSED(index);
     if (section_ == SectionMedia)
         showGallery();
+}
+
+void ServerWindow::sendAttachment(const QString &path)
+{
+    QFileInfo info(path);
+    const QString conversationId = currentConversationId();
+    if (!info.exists() || !messages_ || conversationId.isEmpty())
+        return;
+    if (!model_.may(profile_.identityId, Server::PermAttachFiles)) {
+        MeeruDialog::showMessage(this, QString::fromLatin1("Attach"),
+                                 QString::fromLatin1("Your role here does not allow attaching files."));
+        return;
+    }
+
+    Chat::Message message;
+    message.conversationId = conversationId;
+    message.kind = Chat::KindFile;
+    message.delivery = Chat::DeliveryWaiting;
+    message.sentAtUtc = QDateTime::currentDateTimeUtc();
+    message.authorName = profile_.displayName;
+    message.text = info.fileName();
+    message.attachment.fileId = Chat::newMessageId();
+    message.attachment.fileName = info.fileName();
+    message.attachment.fileSize = info.size();
+    message.attachment.media = Chat::Attachment::mediaForName(info.fileName());
+    message.attachment.localPath = path;
+
+    const Chat::Message stored = messages_->append(message);
+    if (!stored.isValid())
+        return;
+
+    if (node_ && node_->transfers())
+        node_->transfers()->registerOutgoing(stored.attachment.fileId, path);
+    if (node_) {
+        const QList<Server::Member> members = model_.members();
+        for (int i = 0; i < members.size(); ++i) {
+            if (members.at(i).identityId != profile_.identityId)
+                node_->sendMessage(members.at(i).identityId, conversationId, stored);
+        }
+    }
+    showChat(channelId_);
 }
 
 void ServerWindow::onSend()
