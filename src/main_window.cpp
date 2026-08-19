@@ -1756,6 +1756,9 @@ void MainWindow::onPeerConnected(const QString &peerId)
 {
     if (chats_.contains(peerId))
         chats_.value(peerId)->setPeerOnline(true);
+    QHash<QString, ServerWindow *>::const_iterator openRoom = rooms_.constBegin();
+    for (; openRoom != rooms_.constEnd(); ++openRoom)
+        openRoom.value()->refreshPresence();
     roster_.touchContact(peerId, 0);
     refreshList();
     refreshNews();
@@ -1765,6 +1768,9 @@ void MainWindow::onPeerDisconnected(const QString &peerId)
 {
     if (chats_.contains(peerId))
         chats_.value(peerId)->setPeerOnline(false);
+    QHash<QString, ServerWindow *>::const_iterator closedRoom = rooms_.constBegin();
+    for (; closedRoom != rooms_.constEnd(); ++closedRoom)
+        closedRoom.value()->refreshPresence();
     refreshList();
     refreshNews();
 }

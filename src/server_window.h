@@ -69,6 +69,7 @@ public:
     QString serverId() const { return serverId_; }
     void followAnchor();
     void appendMessage(const Chat::Message &message);
+    void refreshPresence();
 
 signals:
     void closed(const QString &serverId);
@@ -130,6 +131,12 @@ private:
     int mediaKind_;
 
     MeeruTitleBar *titleBar_;
+    class BannerFrame *hero_;
+    class AvatarFrame *heroAvatar_;
+    QLabel *heroName_;
+    QLabel *heroSubtitle_;
+    QLabel *channelTitle_;
+    QLabel *channelMeta_;
     QButtonGroup *rail_;
     QListWidget *side_;
     QLabel *sideTitle_;

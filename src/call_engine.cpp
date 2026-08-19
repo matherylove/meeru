@@ -4,7 +4,10 @@
 #include <QBuffer>
 #include <QDesktopWidget>
 #include <QPixmap>
+#include <QDateTime>
 #include <QTimer>
+
+#include "platform_support.h"
 
 #ifdef MEERU_HAS_AUDIO
 #include <QAudioDeviceInfo>
@@ -21,9 +24,6 @@ const int kBitsPerSample = 16;
 const int kVideoWidth = 320;
 const int kVideoHeight = 240;
 const int kVideoQuality = 60;
-const int kVideoIntervalMs = 125;      // eight frames a second
-const int kScreenWidth = 640;
-const int kScreenIntervalMs = 500;     // a screen changes far less than a face
 const int kScreenQuality = 55;
 const int kMaxFrameBytes = 512 * 1024;
 
@@ -50,34 +50,29 @@ bool CallEngine::audioAvailable()
 
 bool CallEngine::cameraAvailable()
 {
-    // Deliberately not claimed. Qt 5.6 can list cameras only with the
-    // multimedia widgets module present, and on the machines this targets a
-    // webcam is the exception. Screen sharing covers the common case.
-    return false;
+    return CameraSource::isAvailable();
 }
 
 QString CallEngine::hardwareNote()
 {
-    return QString::fromLatin1(
-        "Calls use uncompressed sound and JPEG frames. Hardware video encoding is not available on "
-        "this kind of machine: it needs Windows 7 or newer, and the software encoders that would "
-        "replace it need instructions a Pentium III does not have. On a local network this is "
-        "comfortable; over anything slower it will not be.");
+    return Platform::capabilitySummary();
 }
 
 CallEngine::CallEngine(QObject *parent)
     : QObject(parent), state_(Idle), videoOn_(false), screenOn_(false), muted_(false),
-      offeredVideo_(false), videoTimer_(0), screenTimer_(0)
+      offeredVideo_(false), camera_(0), lastCameraFrameMs_(0),
+      videoTimer_(0), screenTimer_(0)
 #ifdef MEERU_HAS_AUDIO
     , input_(0), output_(0), inputDevice_(0), outputDevice_(0)
 #endif
 {
+    // How hard this machine is asked to work depends on what it is.
     videoTimer_ = new QTimer(this);
-    videoTimer_->setInterval(kVideoIntervalMs);
+    videoTimer_->setInterval(Platform::suggestedFrameInterval());
     connect(videoTimer_, SIGNAL(timeout()), this, SLOT(onVideoTick()));
 
     screenTimer_ = new QTimer(this);
-    screenTimer_->setInterval(kScreenIntervalMs);
+    screenTimer_->setInterval(Platform::suggestedFrameInterval() * 2);
     connect(screenTimer_, SIGNAL(timeout()), this, SLOT(onScreenTick()));
 
 #ifdef MEERU_HAS_AUDIO
@@ -177,8 +172,33 @@ void CallEngine::handleAudio(const QString &peerId, const QByteArray &pcm)
 
 void CallEngine::onVideoTick()
 {
-    // Reserved for a camera. Nothing is sent while there is nothing to send,
-    // and the interface says as much rather than showing a black rectangle.
+    // The camera pushes frames as it has them; this only keeps the rate in
+    // check, which the timer already does by gating onCameraFrame.
+}
+
+void CallEngine::onCameraFrame(const QImage &image)
+{
+    if (state_ != Active || !videoOn_ || image.isNull())
+        return;
+
+    // A camera hands over far more frames than this can send, so most are
+    // dropped rather than queued: a late frame is worth nothing in a call.
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - lastCameraFrameMs_ < Platform::suggestedFrameInterval())
+        return;
+    lastCameraFrameMs_ = now;
+
+    QImage frame = image.scaled(kVideoWidth, kVideoHeight, Qt::KeepAspectRatio,
+                                Qt::SmoothTransformation);
+    if (frame.format() != QImage::Format_RGB888)
+        frame = frame.convertToFormat(QImage::Format_RGB888);
+
+    const QByteArray jpeg = encodeFrame(frame, kVideoQuality);
+    if (jpeg.isEmpty() || jpeg.size() > kMaxFrameBytes)
+        return;
+
+    emit videoReady(participants_, jpeg, SourceCamera);
+    emit frameReceived(QString(), frame, SourceCamera);
 }
 
 void CallEngine::onScreenTick()
@@ -191,7 +211,8 @@ void CallEngine::onScreenTick()
     if (shot.isNull())
         return;
 
-    QImage frame = shot.toImage().scaledToWidth(kScreenWidth, Qt::SmoothTransformation);
+    QImage frame = shot.toImage().scaledToWidth(Platform::suggestedScreenWidth(),
+                                               Qt::SmoothTransformation);
     if (frame.format() != QImage::Format_RGB888)
         frame = frame.convertToFormat(QImage::Format_RGB888);
 
@@ -268,6 +289,11 @@ void CallEngine::hangUp()
 
     screenTimer_->stop();
     videoTimer_->stop();
+    if (camera_) {
+        camera_->stop();
+        delete camera_;
+        camera_ = 0;
+    }
     closeAudio();
 
     screenOn_ = false;
@@ -288,10 +314,30 @@ void CallEngine::setMuted(bool muted)
 void CallEngine::setVideoOn(bool on)
 {
     videoOn_ = on && cameraAvailable();
-    if (videoOn_)
-        videoTimer_->start();
-    else
+
+    if (!videoOn_) {
+        if (camera_) {
+            camera_->stop();
+            delete camera_;
+            camera_ = 0;
+        }
         videoTimer_->stop();
+        return;
+    }
+
+    if (!camera_) {
+        camera_ = new CameraSource(this);
+        connect(camera_, SIGNAL(frameReady(QImage)), this, SLOT(onCameraFrame(QImage)));
+    }
+
+    QString error;
+    if (!camera_->start(&error)) {
+        videoOn_ = false;
+        delete camera_;
+        camera_ = 0;
+        return;
+    }
+    videoTimer_->start();
 }
 
 void CallEngine::setScreenSharing(bool on)

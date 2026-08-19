@@ -157,6 +157,35 @@ void ServerWindow::buildUi()
     connect(titleBar_, SIGNAL(pinToggled(bool)), this, SLOT(onPinToggled(bool)));
     layout->addWidget(titleBar_);
 
+    // --- the hero: server picture, name and one line about it
+    hero_ = new BannerFrame(root);
+    hero_->setFixedHeight(96);
+    hero_->setCursor(Qt::ArrowCursor);
+
+    heroAvatar_ = new AvatarFrame(hero_);
+    heroAvatar_->setTileSize(56);
+    heroAvatar_->setInitials(MeeruPaint::initialsFor(model_.name()));
+
+    QHBoxLayout *heroLayout = new QHBoxLayout(hero_);
+    heroLayout->setContentsMargins(16 - heroAvatar_->pictureInset(), 0, 16, 0);
+    heroLayout->setSpacing(14);
+    heroLayout->addWidget(heroAvatar_, 0, Qt::AlignVCenter);
+
+    QWidget *heroText = new QWidget(hero_);
+    QVBoxLayout *heroTextLayout = new QVBoxLayout(heroText);
+    heroTextLayout->setContentsMargins(0, 0, 0, 0);
+    heroTextLayout->setSpacing(4);
+
+    heroName_ = new QLabel(model_.name(), heroText);
+    heroName_->setObjectName(QString::fromLatin1("heroName"));
+    heroSubtitle_ = new QLabel(heroText);
+    heroSubtitle_->setObjectName(QString::fromLatin1("heroSubtitle"));
+
+    heroTextLayout->addWidget(heroName_);
+    heroTextLayout->addWidget(heroSubtitle_);
+    heroLayout->addWidget(heroText, 1, Qt::AlignVCenter);
+    layout->addWidget(hero_);
+
     QHBoxLayout *body = new QHBoxLayout();
     body->setContentsMargins(0, 0, 0, 0);
     body->setSpacing(0);
@@ -224,6 +253,22 @@ void ServerWindow::buildUi()
     QVBoxLayout *rightLayout = new QVBoxLayout(right);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
+
+    QWidget *chatHead = new QWidget(right);
+    chatHead->setObjectName(QString::fromLatin1("chatHead"));
+    chatHead->setAttribute(Qt::WA_StyledBackground, true);
+    chatHead->setFixedHeight(44);
+    QHBoxLayout *chatHeadLayout = new QHBoxLayout(chatHead);
+    chatHeadLayout->setContentsMargins(16, 0, 16, 0);
+    chatHeadLayout->setSpacing(8);
+
+    channelTitle_ = new QLabel(chatHead);
+    channelTitle_->setObjectName(QString::fromLatin1("channelTitle"));
+    channelMeta_ = new QLabel(chatHead);
+    channelMeta_->setObjectName(QString::fromLatin1("channelMeta"));
+    chatHeadLayout->addWidget(channelTitle_, 1);
+    chatHeadLayout->addWidget(channelMeta_, 0, Qt::AlignRight);
+    rightLayout->addWidget(chatHead);
 
     scopeBox_ = new QComboBox(right);
     scopeBox_->setFixedHeight(26);
@@ -556,11 +601,11 @@ QString ServerWindow::renderMessages(const QList<Chat::Message> &messages, const
     QString html = QString::fromLatin1(
         "<style>"
         "p { margin: 0 0 2px 0; }"
-        ".who { margin-top: 8px; color: #DFB2F4; font-size: 11px; }"
+        ".who { margin-top: 12px; font-size: 12px; }"
         ".time { color: #9d8ba5; font-size: 10px; }"
-        ".body { color: #F1E6F5; font-size: 12px; }"
+        ".body { color: #F1E6F5; font-size: 13px; margin-left: 2px; }"
         ".mark { color: #9d8ba5; font-size: 10px; }"
-        ".hit { background: #4a3454; color: #ffffff; font-size: 12px; }"
+        ".hit { background: #4a3454; color: #ffffff; font-size: 13px; }"
         "</style>");
 
     QString lastAuthor;
@@ -569,7 +614,23 @@ QString ServerWindow::renderMessages(const QList<Chat::Message> &messages, const
         const QString who = message.isMine() ? profile_.displayName : message.authorName;
 
         if (who != lastAuthor) {
-            html += QString::fromLatin1("<p class=\"who\"><b>%1</b> <span class=\"time\">%2</span></p>")
+            // Name in the colour of the writer's role, then the time, the way
+            // the mockup lays it out.
+            QString colour = QString::fromLatin1("#DFB2F4");
+            const QList<Server::Member> members = model_.members();
+            for (int m = 0; m < members.size(); ++m) {
+                if (members.at(m).displayName == who || members.at(m).identityId == message.authorId) {
+                    const Server::Role role = model_.role(members.at(m).roleId);
+                    if (!role.colour.isEmpty())
+                        colour = role.colour;
+                    break;
+                }
+            }
+
+            html += QString::fromLatin1(
+                        "<p class=\"who\"><span style=\"color:%1;\"><b>%2</b></span>"
+                        "&nbsp;&nbsp;<span class=\"time\">%3</span></p>")
+                        .arg(colour)
                         .arg(escape(who))
                         .arg(message.sentAtUtc.toLocalTime().toString(QString::fromLatin1("h:mm AP")));
             lastAuthor = who;
@@ -596,6 +657,33 @@ QString ServerWindow::renderMessages(const QList<Chat::Message> &messages, const
 
 void ServerWindow::rebuildContent()
 {
+    // The hero and the channel header always describe what is on screen.
+    int online = 0;
+    const QList<Server::Member> allMembers = model_.members();
+    for (int i = 0; i < allMembers.size(); ++i) {
+        if (node_ && node_->isOnline(allMembers.at(i).identityId))
+            ++online;
+    }
+
+    const QString topic = model_.topic().trimmed();
+    heroSubtitle_->setText(topic.isEmpty()
+        ? QString::fromLatin1("%1 members, %2 online").arg(allMembers.size()).arg(online)
+        : QString::fromLatin1("%1  -  %2 members, %3 online")
+              .arg(topic).arg(allMembers.size()).arg(online));
+
+    const Server::Channel current = model_.channel(channelId_);
+    channelTitle_->setText(group_ ? model_.name()
+                                  : (current.isValid() ? QString::fromLatin1("# ") + current.name
+                                                       : model_.name()));
+    channelMeta_->setText(QString::fromLatin1("%1 online").arg(online));
+
+    if (compose_) {
+        compose_->setPlaceholderText(group_
+            ? QString::fromLatin1("Write in %1...").arg(model_.name())
+            : QString::fromLatin1("Write in %1...").arg(current.isValid() ? current.name
+                                                                         : model_.name()));
+    }
+
     const bool chatty = (section_ == SectionMembers || section_ == SectionChannels
                          || section_ == SectionThreads);
     composeWrap_->setVisible(chatty);
@@ -615,6 +703,12 @@ void ServerWindow::rebuildContent()
         return;
     }
     onSideChoice();
+}
+
+void ServerWindow::refreshPresence()
+{
+    rebuildSide();
+    rebuildContent();
 }
 
 void ServerWindow::showChat(const QString &channelId)

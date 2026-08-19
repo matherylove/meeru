@@ -6,6 +6,8 @@
 #include <QImage>
 #include <QObject>
 #include <QString>
+
+#include "camera_source.h"
 #include <QStringList>
 
 #ifdef MEERU_HAS_AUDIO
@@ -102,6 +104,7 @@ private slots:
     void onAudioReadyRead();
     void onVideoTick();
     void onScreenTick();
+    void onCameraFrame(const QImage &image);
 
 private:
     void openAudio();
@@ -117,6 +120,8 @@ private:
     bool muted_;
     bool offeredVideo_;
 
+    CameraSource *camera_;
+    qint64 lastCameraFrameMs_;
     QTimer *videoTimer_;
     QTimer *screenTimer_;
 
