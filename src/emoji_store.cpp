@@ -5,6 +5,8 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRect>
 
 namespace {
@@ -37,9 +39,44 @@ EmojiStore::EmojiStore(const MeeruPaths &paths, const QString &identityId)
 {
 }
 
+EmojiStore::EmojiStore(const QString &directory)
+    : explicitDirectory_(directory)
+{
+}
+
 QString EmojiStore::directory() const
 {
+    if (!explicitDirectory_.isEmpty())
+        return explicitDirectory_;
     return paths_.identityDirectory(identityId_) + QLatin1String("/emoji");
+}
+
+// Authors live in a small side file rather than in the picture, so nothing has
+// to be re-encoded to record who contributed what.
+QString EmojiStore::authorOf(const QString &name) const
+{
+    QFile file(directory() + QLatin1String("/authors.json"));
+    if (!file.open(QIODevice::ReadOnly))
+        return QString();
+    const QJsonObject object = QJsonDocument::fromJson(file.readAll()).object();
+    return object.value(name).toString();
+}
+
+void EmojiStore::setAuthor(const QString &name, const QString &author)
+{
+    const QString path = directory() + QLatin1String("/authors.json");
+    QJsonObject object;
+    QFile existing(path);
+    if (existing.open(QIODevice::ReadOnly)) {
+        object = QJsonDocument::fromJson(existing.readAll()).object();
+        existing.close();
+    }
+    object.insert(name, author);
+
+    QDir().mkpath(directory());
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        file.write(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
 QList<CustomEmoji> EmojiStore::all() const

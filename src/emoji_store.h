@@ -28,6 +28,10 @@ class EmojiStore
 public:
     EmojiStore(const MeeruPaths &paths, const QString &identityId);
 
+    // A server keeps its own set, shared by everyone in it, so the same class
+    // serves both by being told where to look.
+    explicit EmojiStore(const QString &directory);
+
     QList<CustomEmoji> all() const;
     CustomEmoji byName(const QString &name) const;
     bool contains(const QString &name) const;
@@ -37,6 +41,10 @@ public:
     // whole with the crop applied as they play.
     bool add(const QString &name, const QString &sourcePath, const QRect &crop,
              bool animated, QString *error = 0);
+
+    // Who put it there, kept beside the picture so a server can show it.
+    QString authorOf(const QString &name) const;
+    void setAuthor(const QString &name, const QString &author);
     bool remove(const QString &name, QString *error = 0);
 
     static int maximumSize();
@@ -47,6 +55,7 @@ private:
 
     MeeruPaths paths_;
     QString identityId_;
+    QString explicitDirectory_;
 };
 
 #endif

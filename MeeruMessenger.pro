@@ -31,6 +31,7 @@ SOURCES += \
     src/emoji_store.cpp \
     src/message_store.cpp \
     src/server_model.cpp \
+    src/server_settings.cpp \
     src/server_window.cpp \
     src/platform_support.cpp \
     src/camera_source.cpp \
@@ -67,6 +68,7 @@ HEADERS += \
     src/emoji_store.h \
     src/message_store.h \
     src/server_model.h \
+    src/server_settings.h \
     src/server_window.h \
     src/platform_support.h \
     src/camera_source.h \

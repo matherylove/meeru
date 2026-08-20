@@ -85,7 +85,7 @@ ServerWindow::ServerWindow(const LocalProfile &profile,
       mediaKind_(Chat::MediaImage),
       titleBar_(0), rail_(0), side_(0), sideTitle_(0), scopeBox_(0),
       content_(0), gallery_(0), contentStack_(0), compose_(0), composeWrap_(0),
-      voice_(0), voiceButton_(0)
+      settings_(0), voice_(0), voiceButton_(0)
 {
     if (!model_.load()) {
         model_ = ServerModel::createDefault(paths_, profile_.identityId, server.id,
@@ -119,7 +119,7 @@ ServerWindow::ServerWindow(const LocalProfile &profile,
       section_(SectionMembers), mediaKind_(Chat::MediaImage),
       titleBar_(0), rail_(0), side_(0), sideTitle_(0), scopeBox_(0),
       content_(0), gallery_(0), contentStack_(0), compose_(0), composeWrap_(0),
-      voice_(0), voiceButton_(0)
+      settings_(0), voice_(0), voiceButton_(0)
 {
     if (!model_.load()) {
         QString title = group.title.trimmed();
@@ -309,6 +309,12 @@ void ServerWindow::buildUi()
         "QListWidget::item:hover { background: #2f2139; }"
         "QListWidget::item:selected { background: #4a3454; }"));
     contentStack_->addWidget(gallery_);
+
+    settings_ = new ServerSettings(profile_, paths_, &model_, contentStack_);
+    connect(settings_, SIGNAL(changed()), this, SLOT(onSettingsChanged()));
+    connect(settings_, SIGNAL(memberActionRequested(QString,QString)),
+            this, SIGNAL(memberActionRequested(QString,QString)));
+    contentStack_->addWidget(settings_);
 
     rightLayout->addWidget(contentStack_, 1);
 
@@ -624,12 +630,14 @@ void ServerWindow::fillFileKinds()
 
 void ServerWindow::fillSettings()
 {
-    const char *labels[] = { "Channels", "Categories", "Roles", "Members",
-                             "Picture and banner", "Adult channels", "Audit log", "Custom emoji" };
-    for (int i = 0; i < 8; ++i) {
-        QListWidgetItem *item = new QListWidgetItem(QString::fromLatin1(labels[i]), side_);
-        item->setData(Qt::UserRole, i);
+    for (int page = ServerSettings::PageProfile; page <= ServerSettings::PageAudit; ++page) {
+        QListWidgetItem *item = new QListWidgetItem(ServerSettings::pageName(page), side_);
+        item->setData(Qt::UserRole, page);
     }
+
+    // Not a page of its own: one switch that belongs with the rest.
+    QListWidgetItem *adult = new QListWidgetItem(QString::fromLatin1("Adult channels"), side_);
+    adult->setData(Qt::UserRole, -1);
 }
 
 // -------------------------------------------------------------------- content
@@ -752,14 +760,17 @@ void ServerWindow::rebuildContent()
     const bool chatty = (section_ == SectionMembers || section_ == SectionChannels
                          || section_ == SectionThreads);
     composeWrap_->setVisible(chatty);
-    contentStack_->setCurrentWidget(section_ == SectionMedia ? static_cast<QWidget *>(gallery_)
-                                                             : static_cast<QWidget *>(content_));
+    if (section_ == SectionMedia)
+        contentStack_->setCurrentWidget(gallery_);
+    else if (section_ != SectionSettings)
+        contentStack_->setCurrentWidget(content_);
 
     if (section_ == SectionMedia) {
         showGallery();
         return;
     }
     if (section_ == SectionSettings) {
+        contentStack_->setCurrentWidget(settings_);
         onSideChoice();
         return;
     }
@@ -933,8 +944,9 @@ void ServerWindow::onSideChoice()
 
     case SectionSettings: {
         const int page = item->data(Qt::UserRole).toInt();
-        if (page == 5) {
-            // Adult channels: a plain switch, and nothing is shown until it is on.
+
+        if (page < 0) {
+            // Adult channels: asked once, then applied everywhere at once.
             AppSettings values = SettingsStore(paths_).load();
             const bool now = !values.adultAllowed;
             if (now && !MeeruDialog::confirm(this, QString::fromLatin1("Adult channels"),
@@ -951,63 +963,12 @@ void ServerWindow::onSideChoice()
                                                   : QString::fromLatin1("Disabled adult channels"));
             model_.save(0);
             rebuildSide();
+            rebuildContent();
+            return;
         }
 
-        QString html;
-        switch (page) {
-        case 0: {
-            html = QString::fromLatin1("<p class=\"who\"><b>Channels</b></p>");
-            const QList<Server::Channel> channels = model_.channels();
-            for (int i = 0; i < channels.size(); ++i) {
-                html += QString::fromLatin1("<p class=\"body\">%1%2</p>")
-                            .arg(escape(channels.at(i).name))
-                            .arg(channels.at(i).adultOnly ? QString::fromLatin1("  (18+)") : QString());
-            }
-            break;
-        }
-        case 2: {
-            html = QString::fromLatin1("<p class=\"who\"><b>Roles</b></p>");
-            const QList<Server::Role> roles = model_.roles();
-            for (int i = 0; i < roles.size(); ++i) {
-                html += QString::fromLatin1("<p class=\"body\">%1 <span class=\"mark\">rank %2</span></p>")
-                            .arg(escape(roles.at(i).name)).arg(roles.at(i).rank);
-            }
-            break;
-        }
-        case 3: {
-            html = QString::fromLatin1("<p class=\"who\"><b>Members</b></p>");
-            const QList<Server::Member> members = model_.membersByRank();
-            for (int i = 0; i < members.size(); ++i) {
-                html += QString::fromLatin1("<p class=\"body\">%1 <span class=\"mark\">%2</span></p>")
-                            .arg(escape(members.at(i).displayName))
-                            .arg(escape(model_.role(members.at(i).roleId).name));
-            }
-            break;
-        }
-        case 5:
-            html = QString::fromLatin1("<p class=\"body\">Adult channels are currently %1.</p>")
-                       .arg(adultAllowed_ ? QString::fromLatin1("shown") : QString::fromLatin1("hidden"));
-            break;
-        case 6: {
-            html = QString::fromLatin1("<p class=\"who\"><b>Audit log</b></p>");
-            const QList<Server::AuditEntry> audit = model_.audit();
-            for (int i = audit.size() - 1; i >= 0; --i) {
-                html += QString::fromLatin1("<p class=\"body\">%1 <span class=\"mark\">%2</span></p>")
-                            .arg(escape(audit.at(i).actorName + QString::fromLatin1(": ")
-                                        + audit.at(i).description))
-                            .arg(audit.at(i).atUtc.toLocalTime()
-                                     .toString(QString::fromLatin1("d MMM h:mm AP")));
-            }
-            break;
-        }
-        default:
-            html = QString::fromLatin1("<p class=\"body\">This part of the settings is not "
-                                       "editable from here yet.</p>");
-            break;
-        }
-        content_->setHtml(QString::fromLatin1(
-            "<style>.who{color:#DFB2F4;font-size:12px;}.body{color:#F1E6F5;font-size:12px;}"
-            ".mark{color:#9d8ba5;font-size:10px;}</style>") + html);
+        contentStack_->setCurrentWidget(settings_);
+        settings_->showPage(page);
         break;
     }
 
@@ -1405,6 +1366,21 @@ void ServerWindow::onHistoryLink(const QUrl &url)
         viewers_.insert(messageId, viewer);
         viewer->show();
     }
+}
+
+void ServerWindow::onSettingsChanged()
+{
+    // The name, description and halo all appear elsewhere in this window.
+    heroName_->setText(model_.name());
+    titleBar_->setTitle(model_.name());
+    setWindowTitle(model_.name());
+    heroAvatar_->setInitials(MeeruPaint::initialsFor(model_.name()));
+
+    const QColor halo(model_.haloColour());
+    if (halo.isValid())
+        heroAvatar_->setPresenceColor(halo, true);
+
+    rebuildContent();
 }
 
 void ServerWindow::onAdultToggled(bool allowed)

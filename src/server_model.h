@@ -210,6 +210,17 @@ public:
     void setMemberRole(const QString &identityId, const QString &roleId);
     void setMemberNickname(const QString &identityId, const QString &nickname);
     void setMemberSuspended(const QString &identityId, bool suspended);
+
+    // A member may hold several roles at once; these add and remove one
+    // without disturbing the others.
+    void addRoleToMember(const QString &identityId, const QString &roleId);
+    void removeRoleFromMember(const QString &identityId, const QString &roleId);
+    bool memberHasRole(const QString &identityId, const QString &roleId) const;
+
+    // Hands the highest role over. The old owner keeps their place in the
+    // server but stops being the one who cannot be overruled.
+    bool transferOwnership(const QString &fromIdentityId, const QString &toIdentityId);
+    QString ownerIdentityId() const;
     void addMember(const Server::Member &member);
     void removeMember(const QString &identityId);
     void note(const QString &actorName, const QString &description);

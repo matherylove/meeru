@@ -597,6 +597,125 @@ void ServerModel::setMemberSuspended(const QString &identityId, bool suspended)
     }
 }
 
+void ServerModel::addRoleToMember(const QString &identityId, const QString &roleId)
+{
+    for (int i = 0; i < members_.size(); ++i) {
+        if (members_.at(i).identityId != identityId)
+            continue;
+
+        if (members_.at(i).roleIds.isEmpty() && !members_.at(i).roleId.isEmpty())
+            members_[i].roleIds.append(members_.at(i).roleId);
+        if (!members_.at(i).roleIds.contains(roleId))
+            members_[i].roleIds.append(roleId);
+
+        // roleId stays as the highest one, since that is what orders the list.
+        int best = -1;
+        for (int j = 0; j < members_.at(i).roleIds.size(); ++j) {
+            const Server::Role entry = role(members_.at(i).roleIds.at(j));
+            if (entry.rank > best) {
+                best = entry.rank;
+                members_[i].roleId = entry.id;
+            }
+        }
+        return;
+    }
+}
+
+void ServerModel::removeRoleFromMember(const QString &identityId, const QString &roleId)
+{
+    for (int i = 0; i < members_.size(); ++i) {
+        if (members_.at(i).identityId != identityId)
+            continue;
+
+        if (members_.at(i).roleIds.isEmpty() && !members_.at(i).roleId.isEmpty())
+            members_[i].roleIds.append(members_.at(i).roleId);
+        members_[i].roleIds.removeAll(roleId);
+
+        int best = -1;
+        members_[i].roleId.clear();
+        for (int j = 0; j < members_.at(i).roleIds.size(); ++j) {
+            const Server::Role entry = role(members_.at(i).roleIds.at(j));
+            if (entry.rank > best) {
+                best = entry.rank;
+                members_[i].roleId = entry.id;
+            }
+        }
+        return;
+    }
+}
+
+bool ServerModel::memberHasRole(const QString &identityId, const QString &roleId) const
+{
+    for (int i = 0; i < members_.size(); ++i) {
+        if (members_.at(i).identityId != identityId)
+            continue;
+        if (members_.at(i).roleIds.contains(roleId))
+            return true;
+        return members_.at(i).roleId == roleId;
+    }
+    return false;
+}
+
+QString ServerModel::ownerIdentityId() const
+{
+    // Whoever holds a role with the administrator bit and the highest rank.
+    QString owner;
+    int best = -1;
+    for (int i = 0; i < members_.size(); ++i) {
+        QStringList held = members_.at(i).roleIds;
+        if (held.isEmpty() && !members_.at(i).roleId.isEmpty())
+            held.append(members_.at(i).roleId);
+        for (int j = 0; j < held.size(); ++j) {
+            const Server::Role entry = role(held.at(j));
+            if ((entry.permissions & Server::PermAdministrator) && entry.rank > best) {
+                best = entry.rank;
+                owner = members_.at(i).identityId;
+            }
+        }
+    }
+    return owner;
+}
+
+bool ServerModel::transferOwnership(const QString &fromIdentityId, const QString &toIdentityId)
+{
+    if (fromIdentityId == toIdentityId || toIdentityId.isEmpty())
+        return false;
+    if (ownerIdentityId() != fromIdentityId)
+        return false;   // only the owner may hand it over
+
+    // Find the top role: the one carrying administrator with the highest rank.
+    QString topRoleId;
+    int best = -1;
+    for (int i = 0; i < roles_.size(); ++i) {
+        if ((roles_.at(i).permissions & Server::PermAdministrator) && roles_.at(i).rank > best) {
+            best = roles_.at(i).rank;
+            topRoleId = roles_.at(i).id;
+        }
+    }
+    if (topRoleId.isEmpty())
+        return false;
+
+    addRoleToMember(toIdentityId, topRoleId);
+    removeRoleFromMember(fromIdentityId, topRoleId);
+
+    // The former owner is not left with nothing: they keep the highest role
+    // below the one they gave away.
+    QString fallback;
+    int fallbackRank = -1;
+    for (int i = 0; i < roles_.size(); ++i) {
+        if (roles_.at(i).id == topRoleId)
+            continue;
+        if (roles_.at(i).rank > fallbackRank) {
+            fallbackRank = roles_.at(i).rank;
+            fallback = roles_.at(i).id;
+        }
+    }
+    if (!fallback.isEmpty())
+        addRoleToMember(fromIdentityId, fallback);
+
+    return true;
+}
+
 void ServerModel::addMember(const Server::Member &member)
 {
     for (int i = 0; i < members_.size(); ++i) {

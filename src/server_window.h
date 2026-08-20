@@ -11,6 +11,8 @@
 #include "message_store.h"
 #include "roster.h"
 #include "server_model.h"
+#include "server_settings.h"
+#include "server_settings.h"
 
 class QButtonGroup;
 class QComboBox;
@@ -90,6 +92,8 @@ private slots:
     void onHistoryLink(const QUrl &url);
     void onPinToggled(bool pinned);
     void onAdultToggled(bool allowed);
+    void onSettingsChanged();
+    void onSettingsChanged();
     void onChannelMenu(const QPoint &where);
     void onMemberMenu(const QPoint &where);
     void onEmoji();
@@ -152,6 +156,8 @@ private:
     QTextBrowser *content_;
     QListWidget *gallery_;
     QStackedWidget *contentStack_;
+    ServerSettings *settings_;
+    ServerSettings *settings_;
     QLineEdit *compose_;
     QWidget *composeWrap_;
     class VoiceRecorder *voice_;
