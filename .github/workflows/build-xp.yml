@@ -1,0 +1,94 @@
+name: Build Meeru Messenger
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QT_ARCHIVE_URL: https://github.com/lighterowl/qt563xp/releases/download/1.2/Qt-5.6.3-Static-XP.7z
+  QT_ROOT: C:\Qt\5.6.3-Static-XP
+  VS2017_PATH: C:\BuildTools2017
+
+jobs:
+  # Split into two independent jobs on purpose: they share nothing at runtime,
+  # so a break in one must not hide whether the other still builds. With a
+  # single straight-line job, GitHub Actions stops at the first failing step
+  # and every step after it, including an unrelated build, is skipped.
+  messenger:
+    name: MeeruMessenger.exe
+    runs-on: windows-2022
+    timeout-minutes: 55
+    env:
+      BUILD_DIR: ${{ github.workspace }}\build
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download Qt
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${env:QT_ARCHIVE_URL}" -OutFile "${env:RUNNER_TEMP}\qt-xp.7z"
+
+      - name: Extract Qt
+        shell: pwsh
+        run: |
+          if (Test-Path "${env:QT_ROOT}") { Remove-Item "${env:QT_ROOT}" -Recurse -Force }
+          New-Item -ItemType Directory -Path "C:\Qt" -Force | Out-Null
+          & "C:\Program Files\7-Zip\7z.exe" x "${env:RUNNER_TEMP}\qt-xp.7z" "-oC:\Qt" -y
+          $qmake = "${env:QT_ROOT}\bin\qmake.exe"
+          $spec = "${env:QT_ROOT}\mkspecs\win32-msvc2017\qmake.conf"
+          if (-not (Test-Path $qmake)) { throw "qmake.exe was not found at $qmake" }
+          if (-not (Test-Path $spec)) { throw "qmake.conf was not found at $spec" }
+          & $qmake -v
+          & $qmake -query QT_INSTALL_PREFIX
+          & $qmake -query QMAKE_SPEC
+
+      - name: Install Visual Studio 2017 XP build tools
+        shell: pwsh
+        run: |
+          $bootstrapper = "${env:RUNNER_TEMP}\vs_buildtools_2017.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/vs/15/release/vs_buildtools.exe" -OutFile $bootstrapper
+          $arguments = @(
+            "--quiet",
+            "--wait",
+            "--norestart",
+            "--nocache",
+            "--installPath", "${env:VS2017_PATH}",
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--add", "Microsoft.VisualStudio.Component.VC.v141.x86.x64",
+            "--add", "Microsoft.VisualStudio.Component.WinXP"
+          )
+          $process = Start-Process -FilePath $bootstrapper -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "VS 2017 Build Tools installer failed with exit code $($process.ExitCode)" }
+
+      - name: Generate Makefile
+        shell: cmd
+        run: |
+          call "%VS2017_PATH%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          if exist "%BUILD_DIR%" rmdir /S /Q "%BUILD_DIR%"
+          mkdir "%BUILD_DIR%"
+          cd /d "%BUILD_DIR%"
+          "%QT_ROOT%\bin\qmake.exe" -spec "%QT_ROOT%\mkspecs\win32-msvc2017" ..\MeeruMessenger.pro CONFIG+=release
+          if not exist Makefile exit /b 1
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "%VS2017_PATH%\VC\Auxiliary\Build\vcvarsall.bat" x86
+          cd /d "%BUILD_DIR%"
+          nmake
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeeruMessenger-Windows-XP-x86
+          path: |
+            build\release\MeeruMessenger.exe
+            build\MeeruMessenger.exe
+          if-no-files-found: error
