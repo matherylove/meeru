@@ -7,36 +7,11 @@
 #ifdef MEERU_HAS_AUDIO
 #include <QAudioFormat>
 class QAudioInput;
-
-// Plays back a voice note where it sits, without handing it to another program.
-//
-// Only the WAV that Meeru itself records is played here: the header is read to
-// learn the rate and the rest is pushed straight to the sound card. Anything
-// else is passed to whatever the system already opens it with, since Meeru
-// carries no decoder.
-class VoicePlayer : public QObject
-{
-    Q_OBJECT
-
-public:
-    static VoicePlayer *instance();
-
-    bool play(const QString &path, QString *error = 0);
-    void stop();
-    bool isPlaying() const;
-
-private:
-    explicit VoicePlayer(QObject *parent = 0);
-
-    QFile *file_;
-#ifdef MEERU_HAS_AUDIO
-    QAudioOutput *output_;
-#endif
-};
-
+class QAudioOutput;
 #endif
 
 class QFile;
+class QTimer;
 
 // Records a voice note straight to an uncompressed WAV file.
 //
@@ -46,7 +21,7 @@ class QFile;
 // minute, which is nothing next to the pictures people already send, and it
 // plays on every version of Windows without installing anything.
 //
-// The whole class is behind MEERU_HAS_AUDIO. If the Qt build has no multimedia
+// The audio parts are behind MEERU_HAS_AUDIO. If the Qt build has no multimedia
 // module the program still compiles and simply reports that recording is not
 // available, rather than failing to link.
 class VoiceRecorder : public QObject
@@ -79,11 +54,39 @@ private:
     QString path_;
     bool recording_;
     int seconds_;
-    class QTimer *timer_;
+    QTimer *timer_;
 
 #ifdef MEERU_HAS_AUDIO
     QAudioInput *input_;
     QAudioFormat format_;
+#endif
+};
+
+// Plays a voice note where it sits, without handing it to another program.
+//
+// Only the WAV that Meeru itself records is played here: the header is read to
+// learn how it was recorded and the rest goes straight to the sound card.
+// Anything else is passed to whatever the system already opens it with, since
+// Meeru carries no decoder.
+class VoicePlayer : public QObject
+{
+    Q_OBJECT
+
+public:
+    // Shared on purpose: playing a second note stops the first, which is what
+    // anybody clicking two of them in a row expects.
+    static VoicePlayer *instance();
+
+    bool play(const QString &path, QString *error = 0);
+    void stop();
+    bool isPlaying() const;
+
+private:
+    explicit VoicePlayer(QObject *parent = 0);
+
+    QFile *file_;
+#ifdef MEERU_HAS_AUDIO
+    QAudioOutput *output_;
 #endif
 };
 
