@@ -93,7 +93,6 @@ private slots:
     void onPinToggled(bool pinned);
     void onAdultToggled(bool allowed);
     void onSettingsChanged();
-    void onSettingsChanged();
     void onChannelMenu(const QPoint &where);
     void onMemberMenu(const QPoint &where);
     void onEmoji();
@@ -156,7 +155,6 @@ private:
     QTextBrowser *content_;
     QListWidget *gallery_;
     QStackedWidget *contentStack_;
-    ServerSettings *settings_;
     ServerSettings *settings_;
     QLineEdit *compose_;
     QWidget *composeWrap_;

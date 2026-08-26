@@ -2,6 +2,8 @@
 
 #include <QEvent>
 #include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
