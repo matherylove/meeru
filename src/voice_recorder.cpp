@@ -7,6 +7,7 @@
 #ifdef MEERU_HAS_AUDIO
 #include <QAudioDeviceInfo>
 #include <QAudioInput>
+#include <QAudioOutput>
 #endif
 
 namespace {
@@ -216,4 +217,120 @@ void VoiceRecorder::cancel()
         file_ = 0;
     }
     path_.clear();
+}
+
+
+// ------------------------------------------------------------- VoicePlayer
+
+VoicePlayer *VoicePlayer::instance()
+{
+    // One at a time: starting a second note stops the first, which is what
+    // anybody clicking two of them in a row expects.
+    static VoicePlayer *shared = new VoicePlayer();
+    return shared;
+}
+
+VoicePlayer::VoicePlayer(QObject *parent)
+    : QObject(parent), file_(0)
+#ifdef MEERU_HAS_AUDIO
+    , output_(0)
+#endif
+{
+}
+
+bool VoicePlayer::isPlaying() const
+{
+#ifdef MEERU_HAS_AUDIO
+    return output_ != 0;
+#else
+    return false;
+#endif
+}
+
+void VoicePlayer::stop()
+{
+#ifdef MEERU_HAS_AUDIO
+    if (output_) {
+        output_->stop();
+        delete output_;
+        output_ = 0;
+    }
+#endif
+    if (file_) {
+        file_->close();
+        delete file_;
+        file_ = 0;
+    }
+}
+
+bool VoicePlayer::play(const QString &path, QString *error)
+{
+#ifdef MEERU_HAS_AUDIO
+    stop();
+
+    if (!path.endsWith(QLatin1String(".wav"), Qt::CaseInsensitive)) {
+        if (error) {
+            *error = QString::fromLatin1("Meeru plays its own voice notes; anything else opens in "
+                                         "your usual player.");
+        }
+        return false;
+    }
+
+    file_ = new QFile(path, this);
+    if (!file_->open(QIODevice::ReadOnly)) {
+        delete file_;
+        file_ = 0;
+        if (error)
+            *error = QString::fromLatin1("That recording could not be opened.");
+        return false;
+    }
+
+    // The 44 byte header tells us how it was recorded; the rest is the sound.
+    const QByteArray header = file_->read(44);
+    if (header.size() != 44 || !header.startsWith("RIFF")) {
+        stop();
+        if (error)
+            *error = QString::fromLatin1("That file is not a recording Meeru made.");
+        return false;
+    }
+
+    QDataStream reader(header.mid(22, 16));
+    reader.setByteOrder(QDataStream::LittleEndian);
+    quint16 channels = 1;
+    quint32 sampleRate = 16000;
+    quint32 byteRate = 0;
+    quint16 blockAlign = 0;
+    quint16 bits = 16;
+    reader >> channels >> sampleRate >> byteRate >> blockAlign >> bits;
+
+    QAudioFormat format;
+    format.setSampleRate(static_cast<int>(sampleRate));
+    format.setChannelCount(channels);
+    format.setSampleSize(bits);
+    format.setCodec(QString::fromLatin1("audio/pcm"));
+    format.setByteOrder(QAudioFormat::LittleEndian);
+    format.setSampleType(QAudioFormat::SignedInt);
+
+    const QAudioDeviceInfo device = QAudioDeviceInfo::defaultOutputDevice();
+    if (device.isNull() || !device.isFormatSupported(format)) {
+        if (device.isNull()) {
+            stop();
+            if (error)
+                *error = QString::fromLatin1("This computer has nothing to play sound through.");
+            return false;
+        }
+        format = device.nearestFormat(format);
+    }
+
+    // Deliberately not connected to anything that deletes this: the player is
+    // shared, and the next note to be played stops the previous one.
+    output_ = new QAudioOutput(device, format, this);
+    output_->start(file_);
+    return true;
+#else
+    Q_UNUSED(path);
+    if (error)
+        *error = QString::fromLatin1("This build of Meeru has no audio support.");
+    return false;
+#endif
 }

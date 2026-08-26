@@ -7,6 +7,33 @@
 #ifdef MEERU_HAS_AUDIO
 #include <QAudioFormat>
 class QAudioInput;
+
+// Plays back a voice note where it sits, without handing it to another program.
+//
+// Only the WAV that Meeru itself records is played here: the header is read to
+// learn the rate and the rest is pushed straight to the sound card. Anything
+// else is passed to whatever the system already opens it with, since Meeru
+// carries no decoder.
+class VoicePlayer : public QObject
+{
+    Q_OBJECT
+
+public:
+    static VoicePlayer *instance();
+
+    bool play(const QString &path, QString *error = 0);
+    void stop();
+    bool isPlaying() const;
+
+private:
+    explicit VoicePlayer(QObject *parent = 0);
+
+    QFile *file_;
+#ifdef MEERU_HAS_AUDIO
+    QAudioOutput *output_;
+#endif
+};
+
 #endif
 
 class QFile;

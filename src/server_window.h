@@ -74,6 +74,10 @@ public:
     void appendMessage(const Chat::Message &message);
     void refreshPresence();
 
+private:
+    QString pictureDirectory() const;
+public:
+
 signals:
     void closed(const QString &serverId);
     void callRequested(const QString &conversationId, const QStringList &participants,

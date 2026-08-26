@@ -187,6 +187,11 @@ void ServerWindow::buildUi()
     heroTextLayout->setContentsMargins(0, 0, 0, 0);
     heroTextLayout->setSpacing(4);
 
+    ImageStore heroIcon(pictureDirectory(), QString::fromLatin1("avatar"));
+    ImageStore heroBanner(pictureDirectory(), QString::fromLatin1("banner"));
+    heroAvatar_->setImage(heroIcon);
+    hero_->setImage(heroBanner);
+
     heroName_ = new QLabel(model_.name(), heroText);
     heroName_->setObjectName(QString::fromLatin1("heroName"));
     heroSubtitle_ = new QLabel(heroText);
@@ -711,13 +716,32 @@ QString ServerWindow::renderMessages(const QList<Chat::Message> &messages, const
 
         QString body = escape(message.text);
         if (message.kind == Chat::KindFile && message.attachment.isValid()) {
-            body = escape(message.attachment.fileName);
-            if (message.attachment.transfer == Chat::TransferComplete) {
+            const Chat::Attachment &file = message.attachment;
+            const QString size = file.fileSize > 1024 * 1024
+                ? QString::fromLatin1("%1 MB").arg(file.fileSize / (1024.0 * 1024.0), 0, 'f', 1)
+                : QString::fromLatin1("%1 KB").arg(qMax(qint64(1), file.fileSize / 1024));
+
+            // Percent encoded, so nothing in the identifier can be mistaken for
+            // part of the URL itself.
+            const QString where = QString::fromLatin1(
+                QUrl::toPercentEncoding(message.conversationId));
+
+            body = QString::fromLatin1("%1 <span class=\"mark\">%2</span>")
+                       .arg(escape(file.fileName)).arg(size);
+
+            if (file.transfer == Chat::TransferComplete) {
+                // A voice note plays where it sits; anything else opens.
+                if (file.media == Chat::MediaAudio) {
+                    body += QString::fromLatin1(" <a href=\"meeru:play/%1/%2\">Play</a>")
+                                .arg(where).arg(message.id);
+                }
                 body += QString::fromLatin1(" <a href=\"meeru:view/%1/%2\">Open</a>")
-                            .arg(message.conversationId).arg(message.id);
+                            .arg(where).arg(message.id);
             } else if (!message.isMine()) {
                 body += QString::fromLatin1(" <a href=\"meeru:receive/%1/%2\">Receive</a>")
-                            .arg(message.conversationId).arg(message.id);
+                            .arg(where).arg(message.id);
+            } else {
+                body += QString::fromLatin1(" <span class=\"mark\">offered</span>");
             }
         }
 
@@ -738,11 +762,16 @@ void ServerWindow::rebuildContent()
             ++online;
     }
 
-    const QString topic = model_.topic().trimmed();
-    heroSubtitle_->setText(topic.isEmpty()
+    // The description is what the server says about itself, the way a person
+    // has a status line; the topic is only the first channel's subject.
+    QString lead = model_.description().trimmed();
+    if (lead.isEmpty())
+        lead = model_.topic().trimmed();
+
+    heroSubtitle_->setText(lead.isEmpty()
         ? QString::fromLatin1("%1 members, %2 online").arg(allMembers.size()).arg(online)
         : QString::fromLatin1("%1  -  %2 members, %3 online")
-              .arg(topic).arg(allMembers.size()).arg(online));
+              .arg(lead).arg(allMembers.size()).arg(online));
 
     const Server::Channel current = model_.channel(channelId_);
     channelTitle_->setText(group_ ? model_.name()
@@ -779,6 +808,12 @@ void ServerWindow::rebuildContent()
         return;
     }
     onSideChoice();
+}
+
+QString ServerWindow::pictureDirectory() const
+{
+    return paths_.identityDirectory(profile_.identityId) + QLatin1String("/servers/")
+         + serverId_ + QLatin1String("-pictures");
 }
 
 void ServerWindow::refreshPresence()
@@ -1342,7 +1377,7 @@ void ServerWindow::onHistoryLink(const QUrl &url)
     if (parts.size() != 3)
         return;
 
-    const QString conversationId = parts.at(1);
+    const QString conversationId = QUrl::fromPercentEncoding(parts.at(1).toUtf8());
     const QString messageId = parts.at(2);
     const Chat::Message message = messages_->message(conversationId, messageId);
 
@@ -1353,6 +1388,13 @@ void ServerWindow::onHistoryLink(const QUrl &url)
                                      QString::fromLatin1("That file can only be fetched while the "
                                                          "person who sent it is online."));
         }
+        return;
+    }
+
+    if (parts.first() == QLatin1String("play") && message.attachment.isValid()) {
+        QString error;
+        if (!VoicePlayer::instance()->play(message.attachment.localPath, &error))
+            MeeruDialog::showMessage(this, QString::fromLatin1("Play"), error);
         return;
     }
 
@@ -1375,6 +1417,12 @@ void ServerWindow::onSettingsChanged()
     titleBar_->setTitle(model_.name());
     setWindowTitle(model_.name());
     heroAvatar_->setInitials(MeeruPaint::initialsFor(model_.name()));
+
+    // Reloaded from disk, so a new icon or banner shows the moment it is saved.
+    ImageStore icon(pictureDirectory(), QString::fromLatin1("avatar"));
+    ImageStore banner(pictureDirectory(), QString::fromLatin1("banner"));
+    heroAvatar_->setImage(icon);
+    hero_->setImage(banner);
 
     const QColor halo(model_.haloColour());
     if (halo.isValid())

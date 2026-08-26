@@ -118,6 +118,14 @@ QString ServerSettings::serverEmojiDirectory() const
          + model_->serverId() + QLatin1String("-emoji");
 }
 
+// Where the icon and the banner live. A folder of its own, so nothing has to
+// guess a path by walking up out of another one.
+QString ServerSettings::serverPictureDirectory() const
+{
+    return paths_.identityDirectory(profile_.identityId) + QLatin1String("/servers/")
+         + model_->serverId() + QLatin1String("-pictures");
+}
+
 QString ServerSettings::serverSoundDirectory() const
 {
     return paths_.identityDirectory(profile_.identityId) + QLatin1String("/servers/")
@@ -254,8 +262,7 @@ void ServerSettings::onSaveProfile()
 
 void ServerSettings::onChangeIcon()
 {
-    ImageStore store(serverEmojiDirectory() + QLatin1String("/../") + model_->serverId(),
-                     QString::fromLatin1("avatar"));
+    ImageStore store(serverPictureDirectory(), QString::fromLatin1("avatar"));
     const QString path = QFileDialog::getOpenFileName(
         this, QString::fromLatin1("Server icon"), QDir::homePath(),
         QString::fromLatin1("Pictures (*.png *.jpg *.jpeg *.bmp *.gif)"));
@@ -280,8 +287,7 @@ void ServerSettings::onChangeIcon()
 
 void ServerSettings::onChangeBanner()
 {
-    ImageStore store(serverEmojiDirectory() + QLatin1String("/../") + model_->serverId(),
-                     QString::fromLatin1("banner"));
+    ImageStore store(serverPictureDirectory(), QString::fromLatin1("banner"));
     const QString path = QFileDialog::getOpenFileName(
         this, QString::fromLatin1("Server banner"), QDir::homePath(),
         QString::fromLatin1("Pictures (*.png *.jpg *.jpeg *.bmp *.gif)"));

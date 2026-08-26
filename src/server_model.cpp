@@ -40,7 +40,11 @@ QString Server::Channel::conversationId(const QString &serverId) const
 {
     // Each channel keeps its own history, so it is its own conversation as far
     // as the message store is concerned.
-    return serverId + QLatin1Char('#') + id;
+    //
+    // The separator is a tilde rather than a hash on purpose: this identifier
+    // ends up inside links in the chat, and a hash would start the fragment
+    // part of a URL, silently cutting everything after it away.
+    return serverId + QLatin1Char('~') + id;
 }
 
 quint32 Server::defaultPermissions()

@@ -23,6 +23,7 @@
 #include "meeru_style.h"
 #include "meeru_window.h"
 #include "peer_node.h"
+#include "voice_recorder.h"
 #include "presence.h"
 
 namespace {
@@ -410,7 +411,9 @@ QString DmWindow::formatMessage(const Chat::Message &message, bool withHeader) c
         case Chat::TransferOffered:
             // Nothing has been downloaded: the choice is the receiver's.
             state = message.isMine()
-                ? QString::fromLatin1("<span class=\"mark\">offered</span>")
+                ? (file.media == Chat::MediaAudio && !file.localPath.isEmpty()
+                       ? QString::fromLatin1("<a href=\"meeru:play/%1\">Play</a>").arg(message.id)
+                       : QString::fromLatin1("<span class=\"mark\">offered</span>"))
                 : QString::fromLatin1("<a href=\"meeru:receive/%1\">Receive</a>").arg(message.id);
             break;
         case Chat::TransferRunning: {
@@ -420,7 +423,11 @@ QString DmWindow::formatMessage(const Chat::Message &message, bool withHeader) c
             break;
         }
         case Chat::TransferComplete:
-            state = QString::fromLatin1("<a href=\"meeru:open/%1\">Open</a>").arg(message.id);
+            // A voice note plays right here; anything else opens outside.
+            state = file.media == Chat::MediaAudio
+                ? QString::fromLatin1("<a href=\"meeru:play/%1\">Play</a> "
+                                      "<a href=\"meeru:open/%1\">Open</a>").arg(message.id)
+                : QString::fromLatin1("<a href=\"meeru:open/%1\">Open</a>").arg(message.id);
             break;
         default:
             state = QString::fromLatin1("<span class=\"mark\">failed</span>");
@@ -673,6 +680,14 @@ void DmWindow::onHistoryLink(const QUrl &url)
                                      QString::fromLatin1("A file only travels while you are both "
                                                          "connected. Try again when they are online."));
         }
+        return;
+    }
+
+    if (parts.first() == QLatin1String("play") && parts.size() == 2) {
+        const Chat::Message message = messages_->message(conversationId_, parts.at(1));
+        QString error;
+        if (!VoicePlayer::instance()->play(message.attachment.localPath, &error))
+            MeeruDialog::showMessage(this, QString::fromLatin1("Play"), error);
         return;
     }
 

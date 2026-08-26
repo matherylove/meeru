@@ -86,6 +86,7 @@ private:
 
     QString serverEmojiDirectory() const;
     QString serverSoundDirectory() const;
+    QString serverPictureDirectory() const;
     bool may(quint32 permission) const;
 
     LocalProfile profile_;

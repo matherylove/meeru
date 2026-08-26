@@ -64,6 +64,48 @@ inline QString sheet()
         "QAbstractScrollArea { background: #30223B; border: 0; }"
 
         "#emptyState { color: #C9B9CF; font-size: 11px; background: #30223B; }"
+        // Widgets that Qt draws with the system palette unless told otherwise. Left
+        // alone they come out white on white and cannot be read at all.
+        "QComboBox { background: #19121f; border: 1px solid #634A70; border-radius: 6px;"
+        "            color: #F1E6F5; font-size: 12px; padding: 2px 8px; }"
+        "QComboBox:hover { border-color: #DFB2F4; }"
+        "QComboBox::drop-down { border: 0; width: 18px; }"
+        "QComboBox::down-arrow { image: none; border-left: 4px solid transparent;"
+        "                        border-right: 4px solid transparent;"
+        "                        border-top: 5px solid #C9B9CF; margin-right: 6px; }"
+        "QComboBox QAbstractItemView { background: #19121f; border: 1px solid #634A70;"
+        "                              color: #F1E6F5; selection-background-color: #4a3454;"
+        "                              selection-color: #ffffff; outline: 0; }"
+
+        "QScrollArea { background: transparent; border: 0; }"
+        "QScrollArea > QWidget > QWidget { background: transparent; }"
+        "QAbstractScrollArea { background: transparent; }"
+
+        "QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }"
+        "QScrollBar::handle:vertical { background: #4a3454; border-radius: 5px; min-height: 24px; }"
+        "QScrollBar::handle:vertical:hover { background: #634A70; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+        "QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }"
+        "QScrollBar::handle:horizontal { background: #4a3454; border-radius: 5px; min-width: 24px; }"
+        "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }"
+        "QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }"
+
+        "QCheckBox { color: #E4D6EA; font-size: 11px; spacing: 7px; background: transparent; }"
+        "QCheckBox:disabled { color: #6f6076; }"
+        "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 4px;"
+        "                       border: 1px solid #634A70; background: #19121f; }"
+        "QCheckBox::indicator:checked { background: #DFB2F4; border-color: #DFB2F4; }"
+        "QCheckBox::indicator:disabled { border-color: #4a3454; background: #221a2a; }"
+
+        "QMenu { background: #241B2E; border: 1px solid #634A70; color: #E4D6EA; padding: 4px; }"
+        "QMenu::item { padding: 6px 22px 6px 14px; border-radius: 4px; }"
+        "QMenu::item:selected { background: #4a3454; color: #ffffff; }"
+        "QMenu::item:disabled { color: #6f6076; }"
+        "QMenu::separator { height: 1px; background: #634A70; margin: 4px 8px; }"
+
+        "QToolTip { background: #241B2E; color: #F1E6F5; border: 1px solid #634A70; padding: 4px; }"
+
         "#serverTabs { background: #1d1524; border-bottom: 1px solid #634A70; }"
         "#serverTab { background: transparent; border: 0; border-bottom: 2px solid transparent;"
         "             color: #C9B9CF; font-size: 12px; padding: 0 12px; }"
