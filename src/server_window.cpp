@@ -20,6 +20,7 @@
 #include <QAction>
 #include <QCursor>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMenu>
@@ -435,7 +436,7 @@ void ServerWindow::fillMembers()
         rowLayout->setSpacing(9);
 
         AvatarFrame *avatar = new AvatarFrame(row);
-        avatar->setTileSize(30);
+        avatar->setTileSize(28);
         avatar->setInitials(MeeruPaint::initialsFor(
             member.nickname.isEmpty() ? member.displayName : member.nickname));
         avatar->setPresenceColor(Presence::color(state), online);
@@ -469,7 +470,10 @@ void ServerWindow::fillMembers()
 
         QListWidgetItem *item = new QListWidgetItem(side_);
         item->setData(Qt::UserRole, member.identityId);
-        item->setSizeHint(QSize(0, 44));
+
+        // Asked for rather than guessed: the avatar draws a halo around itself,
+        // so it is taller than its tile, and a fixed number clipped it.
+        item->setSizeHint(QSize(0, qMax(46, row->sizeHint().height())));
         side_->setItemWidget(item, row);
     }
 }
@@ -729,19 +733,38 @@ QString ServerWindow::renderMessages(const QList<Chat::Message> &messages, const
             body = QString::fromLatin1("%1 <span class=\"mark\">%2</span>")
                        .arg(escape(file.fileName)).arg(size);
 
-            if (file.transfer == Chat::TransferComplete) {
-                // A voice note plays where it sits; anything else opens.
+            // What matters is whether the file is on this machine, not how it
+            // got here. Something you sent yourself never becomes "complete",
+            // because it was never transferred: it was always here.
+            const bool here = !file.localPath.isEmpty()
+                           && (file.transfer == Chat::TransferComplete || message.isMine())
+                           && QFile::exists(file.localPath);
+
+            if (here) {
                 if (file.media == Chat::MediaAudio) {
                     body += QString::fromLatin1(" <a href=\"meeru:play/%1/%2\">Play</a>")
                                 .arg(where).arg(message.id);
                 }
                 body += QString::fromLatin1(" <a href=\"meeru:view/%1/%2\">Open</a>")
                             .arg(where).arg(message.id);
+                body += QString::fromLatin1(" <a href=\"meeru:save/%1/%2\">Save a copy</a>")
+                            .arg(where).arg(message.id);
+
+                // A picture is shown, not merely named. Anything wider than the
+                // panel is scaled down so the layout cannot be pushed sideways.
+                if (file.media == Chat::MediaImage || file.media == Chat::MediaAnimation) {
+                    body += QString::fromLatin1(
+                                "<br><a href=\"meeru:view/%1/%2\">"
+                                "<img src=\"file:///%3\" width=\"260\"></a>")
+                                .arg(where).arg(message.id)
+                                .arg(QString(file.localPath).replace(QLatin1Char('\\'),
+                                                                     QLatin1Char('/')));
+                }
             } else if (!message.isMine()) {
                 body += QString::fromLatin1(" <a href=\"meeru:receive/%1/%2\">Receive</a>")
                             .arg(where).arg(message.id);
             } else {
-                body += QString::fromLatin1(" <span class=\"mark\">offered</span>");
+                body += QString::fromLatin1(" <span class=\"mark\">waiting to be asked for</span>");
             }
         }
 
@@ -1395,6 +1418,17 @@ void ServerWindow::onHistoryLink(const QUrl &url)
         QString error;
         if (!VoicePlayer::instance()->play(message.attachment.localPath, &error))
             MeeruDialog::showMessage(this, QString::fromLatin1("Play"), error);
+        return;
+    }
+
+    if (parts.first() == QLatin1String("save") && message.attachment.isValid()) {
+        const QString target = QFileDialog::getSaveFileName(
+            this, QString::fromLatin1("Save a copy"),
+            QDir::homePath() + QLatin1Char('/') + message.attachment.fileName);
+        if (target.isEmpty())
+            return;
+        QFile::remove(target);
+        QFile::copy(message.attachment.localPath, target);
         return;
     }
 

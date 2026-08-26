@@ -4,6 +4,7 @@
 #include <QDesktopServices>
 #include <QDialog>
 #include <QFrame>
+#include <QFile>
 #include <QFileDialog>
 #include <QDir>
 #include <QFileInfo>
@@ -406,36 +407,41 @@ QString DmWindow::formatMessage(const Chat::Message &message, bool withHeader) c
             ? QString::fromLatin1("%1 MB").arg(file.fileSize / (1024.0 * 1024.0), 0, 'f', 1)
             : QString::fromLatin1("%1 KB").arg(qMax(qint64(1), file.fileSize / 1024));
 
+        // On this machine or not: something you sent yourself was never
+        // transferred, so it never becomes "complete", but it is right here.
+        const bool here = !file.localPath.isEmpty()
+                       && (file.transfer == Chat::TransferComplete || message.isMine())
+                       && QFile::exists(file.localPath);
+
         QString state;
-        switch (file.transfer) {
-        case Chat::TransferOffered:
-            // Nothing has been downloaded: the choice is the receiver's.
-            state = message.isMine()
-                ? (file.media == Chat::MediaAudio && !file.localPath.isEmpty()
-                       ? QString::fromLatin1("<a href=\"meeru:play/%1\">Play</a>").arg(message.id)
-                       : QString::fromLatin1("<span class=\"mark\">offered</span>"))
-                : QString::fromLatin1("<a href=\"meeru:receive/%1\">Receive</a>").arg(message.id);
-            break;
-        case Chat::TransferRunning: {
+        if (here) {
+            if (file.media == Chat::MediaAudio) {
+                state += QString::fromLatin1("<a href=\"meeru:play/%1\">Play</a> ").arg(message.id);
+            }
+            state += QString::fromLatin1("<a href=\"meeru:open/%1\">Open</a> "
+                                         "<a href=\"meeru:save/%1\">Save a copy</a>").arg(message.id);
+        } else if (file.transfer == Chat::TransferRunning) {
             const int percent = file.fileSize > 0
                 ? static_cast<int>((file.received * 100) / file.fileSize) : 0;
             state = QString::fromLatin1("<span class=\"mark\">receiving %1%</span>").arg(percent);
-            break;
-        }
-        case Chat::TransferComplete:
-            // A voice note plays right here; anything else opens outside.
-            state = file.media == Chat::MediaAudio
-                ? QString::fromLatin1("<a href=\"meeru:play/%1\">Play</a> "
-                                      "<a href=\"meeru:open/%1\">Open</a>").arg(message.id)
-                : QString::fromLatin1("<a href=\"meeru:open/%1\">Open</a>").arg(message.id);
-            break;
-        default:
+        } else if (file.transfer == Chat::TransferFailed) {
             state = QString::fromLatin1("<span class=\"mark\">failed</span>");
-            break;
+        } else if (message.isMine()) {
+            state = QString::fromLatin1("<span class=\"mark\">waiting to be asked for</span>");
+        } else {
+            state = QString::fromLatin1("<a href=\"meeru:receive/%1\">Receive</a>").arg(message.id);
         }
 
-        out += QString::fromLatin1("<p class=\"body\">%1 <span class=\"mark\">%2</span> %3%4</p>")
-                   .arg(escape(file.fileName)).arg(size).arg(state).arg(mark);
+        QString preview;
+        if (here && (file.media == Chat::MediaImage || file.media == Chat::MediaAnimation)) {
+            preview = QString::fromLatin1("<br><a href=\"meeru:open/%1\">"
+                                          "<img src=\"file:///%2\" width=\"240\"></a>")
+                          .arg(message.id)
+                          .arg(QString(file.localPath).replace(QLatin1Char('\\'), QLatin1Char('/')));
+        }
+
+        out += QString::fromLatin1("<p class=\"body\">%1 <span class=\"mark\">%2</span> %3%4%5</p>")
+                   .arg(escape(file.fileName)).arg(size).arg(state).arg(mark).arg(preview);
         return out;
     }
 
@@ -688,6 +694,18 @@ void DmWindow::onHistoryLink(const QUrl &url)
         QString error;
         if (!VoicePlayer::instance()->play(message.attachment.localPath, &error))
             MeeruDialog::showMessage(this, QString::fromLatin1("Play"), error);
+        return;
+    }
+
+    if (parts.first() == QLatin1String("save") && parts.size() == 2) {
+        const Chat::Message message = messages_->message(conversationId_, parts.at(1));
+        const QString target = QFileDialog::getSaveFileName(
+            this, QString::fromLatin1("Save a copy"),
+            QDir::homePath() + QLatin1Char('/') + message.attachment.fileName);
+        if (target.isEmpty())
+            return;
+        QFile::remove(target);
+        QFile::copy(message.attachment.localPath, target);
         return;
     }
 
